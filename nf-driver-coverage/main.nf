@@ -72,10 +72,11 @@ process get_driver_gene_coords {
       while read -r gene ; do
 
       # get the gene coords from the gff3 file
+      # (chr start end gene strand)
       zcat /lustre/scratch125/casm/team268im/at31/reference/gencode/gencode.v28.annotation.gff3.gz \
       | grep -w \$gene \
       | awk -F"\t" -v OFS="\\t" -v gene=\$gene \
-        '\$3 == "gene" {print \$1, \$4, \$5, gene}' ;
+        '\$3 == "gene" {print \$1, \$4, \$5, gene, \$7}' ;
 
       done < $drivers_txt
     ) | cat > driver_genes.bed
@@ -102,7 +103,7 @@ process subset_bams_to_drivers {
 }
 
 // split subsetted BAMs by cell, count coverage
-process split_bams_by_cell {
+process get_coverage_per_cell {
   tag "${meta.id}"
   label 'normal'
   publishDir "${params.out_dir}/", mode: "copy"
@@ -111,60 +112,67 @@ process split_bams_by_cell {
     path(drivers_bed)
   output:
     tuple val(meta), path("${meta.id}_driver_coverage.tsv")
+    path(drivers_bed)
   script:
     """
     module load samtools-1.19/python-3.12.0 
 
-    # get cell barcodes
+    echo "getting cell barcodes"
     mkdir cell_bams
-    samtools view $bam | cut -f12 | cut -d':' -f3 | sort | uniq \
+    samtools view $bam | cut -f12 | cut -d':' -f3 \
+    | awk '!x[\$0]++' \
     > cell_barcodes.txt
 
     # run per gene
-    while read -r chr start end gene ; do
+    while read -r chr start end gene strand ; do
+
+      echo "processing gene \$gene"
 
       # initialise gene coverage file
       mkdir \${gene}
       touch \${gene}_cov.tsv
 
-      # subset by cell barcode
+      echo "subsetting and calculating coverage by cell"
       while read -r CB ; do
         
-        # subset
         echo \$CB > \$CB.txt
-        subset-bam \
-          -b $bam \
-          --cell-barcodes \$CB.txt \
-          --out-bam cell_bams/\$CB.bam
+        if [ ! -f cell_bams/\$CB.bam ] ; then
+          # subset
+          subset-bam \
+            -b $bam \
+            --cell-barcodes \$CB.txt \
+            --out-bam cell_bams/\$CB.bam
+          # index
+          samtools index -@ ${task.cpus} cell_bams/\$CB.bam
+        fi
         rm \$CB.txt
-
-        # index
-        samtools index -@ ${task.cpus} cell_bams/\$CB.bam
 
         # get coverage per base in the gene
         (
           echo -e "chr\\tpos\\tgene\\t\$CB" ;
           samtools depth -a -r \$chr:\$start-\$end cell_bams/\$CB.bam \
-          | awk -v OFS="\t" -v gene=\$gene '{print \$1, \$2, gene, \$3}' ;
+          | cut -f3 ;
         ) > \${gene}/\$CB.tsv
-
-        # get first three rows
-        cut -f1-3 \${gene}/\$CB.tsv > \${gene}_coords.tsv
-
-        # cbind the coverage
-        paste \${gene}_cov.tsv <(cut -f4 \${gene}/\$CB.tsv)
 
       done < cell_barcodes.txt
 
+      # create coords cols
+      (
+        echo -e "chr\\tpos" ;
+        echo -e "\$chr\\t\$start\\t\$end" \
+        | awk '{for(i=\$2; i<=\$3; i++) print \$1, i}' ;
+      ) > \${gene}_coords.tsv
+
+      # cbind the coverage cols
+      paste \${gene}/*.tsv > \${gene}_cov.tsv
+
       # combine coords and coverage
-      paste \${gene}_coords.tsv \${gene}_cov.tsv > driver_\${gene}.tsv
+      paste \${gene}_coords.tsv \${gene}_cov.tsv > \${gene}_cov_per_cell.tsv
 
     done < $drivers_bed
 
-    # rbind the genes, add header with CBs
-    cb_header=\$(tr '\\n' '\\t' cell_barcodes.txt)
-    echo -e "chr\\tpos\\tgene\\t\$cb_header" > header.tsv
-    cat header.tsv driver_*.tsv >> ${meta.id}_driver_coverage.tsv
+    echo "combining outputs"
+    cat driver_*.tsv >> ${meta.id}_driver_coverage.tsv
     """
 }
 
@@ -175,6 +183,7 @@ process plot_coverage {
   publishDir "${params.out_dir}/", mode: "copy"
   input:
     tuple val(meta), path(cov)
+    path(drivers_bed)
   output:
     path("*_coverage_plot.png")
   script:
@@ -184,6 +193,11 @@ process plot_coverage {
     # libraries
     library(magrittr)
     library(ggplot2)
+
+    # get gene strand info (to orient 5'/3' ends)
+    drivers <- 
+      readr::read_tsv("${drivers_bed}",
+                      col_names = c("chr", "start", "end", "gene", "strand"))
 
     # get coverage data
     cov <- readr::read_tsv("${cov}")
@@ -266,7 +280,7 @@ workflow {
 
   // plot coverage per base per gene per cell
   subset_bams_to_drivers(sample_bams, drivers_bed)
-  split_bams_by_cell(subset_bams_to_drivers.out)
-  plot_coverage(split_bams_by_cell.out)
+  get_coverage_per_cell(subset_bams_to_drivers.out)
+  plot_coverage(get_coverage_per_cell.out)
   
 }
