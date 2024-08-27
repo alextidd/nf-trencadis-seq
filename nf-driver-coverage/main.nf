@@ -107,11 +107,12 @@ process get_coverage_per_cell {
   tag "${meta.id}"
   label 'normal'
   publishDir "${params.out_dir}/", mode: "copy"
+  errorStrategy 'ignore'
   input:
     tuple val(meta), path(bam), path(bai)
     path(drivers_bed)
   output:
-    tuple val(meta), path("${meta.id}_driver_coverage.tsv")
+    tuple val(meta), path("${meta.id}_driver_coverage_per_cell.tsv")
     path(drivers_bed)
   script:
     """
@@ -123,6 +124,19 @@ process get_coverage_per_cell {
     | awk '!x[\$0]++' \
     > cell_barcodes.txt
 
+    echo "creating a bam per cell"
+    while read -r CB ; do
+      # subset
+      echo \$CB > \$CB.txt
+      subset-bam \
+        -b $bam \
+        --cell-barcodes \$CB.txt \
+        --out-bam cell_bams/\$CB.bam
+      # index
+      samtools index -@ ${task.cpus} cell_bams/\$CB.bam
+      rm \$CB.txt
+    done < cell_barcodes.txt
+
     # run per gene
     while read -r chr start end gene strand ; do
 
@@ -132,39 +146,26 @@ process get_coverage_per_cell {
       mkdir \${gene}
       touch \${gene}_cov.tsv
 
-      echo "subsetting and calculating coverage by cell"
+      echo "calculating coverage per base per cell"
       while read -r CB ; do
-        
-        echo \$CB > \$CB.txt
-        if [ ! -f cell_bams/\$CB.bam ] ; then
-          # subset
-          subset-bam \
-            -b $bam \
-            --cell-barcodes \$CB.txt \
-            --out-bam cell_bams/\$CB.bam
-          # index
-          samtools index -@ ${task.cpus} cell_bams/\$CB.bam
-        fi
-        rm \$CB.txt
-
-        # get coverage per base in the gene
         (
-          echo -e "chr\\tpos\\tgene\\t\$CB" ;
+          echo "\$CB" ;
           samtools depth -a -r \$chr:\$start-\$end cell_bams/\$CB.bam \
           | cut -f3 ;
         ) > \${gene}/\$CB.tsv
-
       done < cell_barcodes.txt
 
-      # create coords cols
+      echo "creating coverage file"
       (
-        echo -e "chr\\tpos" ;
+        echo -e "chr\\tpos\\tgene" ;
         echo -e "\$chr\\t\$start\\t\$end" \
-        | awk '{for(i=\$2; i<=\$3; i++) print \$1, i}' ;
+        | awk -F"\\t" -v gene=\$gene -v OFS="\\t" \
+          '{for(i=\$2; i<=\$3; i++) print \$1, i, gene}' ;
       ) > \${gene}_coords.tsv
 
-      # cbind the coverage cols
-      paste \${gene}/*.tsv > \${gene}_cov.tsv
+      echo "adding coverage per cell to coverage file"
+      # (sort for consistent ordering)
+      paste \$(ls \${gene}/*.tsv | sort) > \${gene}_cov.tsv
 
       # combine coords and coverage
       paste \${gene}_coords.tsv \${gene}_cov.tsv > \${gene}_cov_per_cell.tsv
@@ -172,7 +173,10 @@ process get_coverage_per_cell {
     done < $drivers_bed
 
     echo "combining outputs"
-    cat driver_*.tsv >> ${meta.id}_driver_coverage.tsv
+    ls *_cov_per_cell.tsv | head -1 | xargs head -1 \
+    > ${meta.id}_driver_coverage_per_cell.tsv
+    cat *_cov_per_cell.tsv | grep -vP "^chr\\tpos" \
+    >> ${meta.id}_driver_coverage_per_cell.tsv
     """
 }
 
@@ -181,6 +185,7 @@ process plot_coverage {
   tag "${meta.id}"
   label 'normal'
   publishDir "${params.out_dir}/", mode: "copy"
+  beforeScript "module load R/4.2.2"
   input:
     tuple val(meta), path(cov)
     path(drivers_bed)
@@ -204,12 +209,13 @@ process plot_coverage {
 
     # get celltype annotations
     annot <- readr::read_tsv("${params.celltypes}") %>%
-      dplyr::select(CB = barcode_revc, celltype, donor_id)
+      dplyr::filter(donor_id == "${meta.id}") %>%
+      dplyr::select(CB = barcode_revc, celltype)
 
     # prep plotting data
     p_dat <-
       cov %>%
-      tidyr::pivot_longer(cols = -c(chr, start, end, donor_id),
+      tidyr::pivot_longer(cols = -c(chr, pos, gene),
                           names_to = "CB", values_to = "cov per cell") %>%
       dplyr::inner_join(annot)
     
@@ -229,16 +235,17 @@ process plot_coverage {
           coord_cartesian(xlim = c(min(p_dat\$start), max(p_dat\$start)))
 
         # plot genotyping efficiency (% of cells with >= `min_cov` reads per position)
+        genotyping_efficiency <-
+          cov %>%
+          dplyr::select(-c(chr, pos, gene)) %>%
+          as.matrix() %>%
+          {rowMeans(. >= min_cov)}
         p_genotyping_efficiency <-
-          p_dat_g %>%
-          dplyr::group_by(chr, start, end) %>%
-          dplyr::summarise(n_cells = sum(cov >= min_cov),
-                          n_cells_total = dplyr::n(),
-                          `genotyping\nefficiency` = n_cells / n_cells_total) %>%
-          ggplot(aes(x = start, fill = `genotyping\nefficiency`, y = 1)) +
+          cbind(cov[, c("chr", "pos", "gene")], genotyping_efficiency) %>%
+          ggplot(aes(x = pos, fill = genotyping_efficiency, y = 1)) +
           geom_col(width = 1) +
           theme_minimal() +
-          coord_cartesian(xlim = c(min(p_dat\$start), max(p_dat\$start)))
+          coord_cartesian(xlim = c(min(p_dat\$pos), max(p_dat\$pos)))
 
         png(paste0("${meta.id}_", gene, "_coverage_plot.png"))
         cowplot::plot_grid(p_cov_per_base, p_genotyping_efficiency, ncol = 1,
@@ -272,9 +279,9 @@ workflow {
   
   // get driver gene coords
   // TODO: create channel of genes, parallelise
-  // Channel.fromPath(params.drivers) \
-  // | splitText() \
-  // | set { ch_drivers }
+  // Channel.fromPath(params.drivers).splitText().set { ch_drivers }
+  // ch_drivers.view()
+
   drivers_txt = file(params.drivers)
   drivers_bed = get_driver_gene_coords(drivers_txt)
 
