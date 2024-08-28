@@ -61,59 +61,53 @@ process local {
 
 // get driver gene coords
 process get_driver_gene_coords {
+  tag "${gene}"
   label 'normal'
   input:
-    path(drivers_txt)
+    val(gene)
   output:
-    path("driver_genes.bed")
+    tuple val(gene), path("${gene}.bed")
   script:
     """
-    (
-      while read -r gene ; do
-
-      # get the gene coords from the gff3 file
-      # (chr start end gene strand)
-      zcat /lustre/scratch125/casm/team268im/at31/reference/gencode/gencode.v28.annotation.gff3.gz \
-      | grep -w \$gene \
-      | awk -F"\t" -v OFS="\\t" -v gene=\$gene \
-        '\$3 == "gene" {print \$1, \$4, \$5, gene, \$7}' ;
-
-      done < $drivers_txt
-    ) | cat > driver_genes.bed
+    # get the gene coords from the gff3 file (chr start end gene strand)
+    zcat /lustre/scratch125/casm/team268im/at31/reference/gencode/gencode.v28.annotation.gff3.gz \
+    | grep -w ${gene} \
+    | awk -F"\\t" -v OFS="\\t" '\$3 == "gene" {print \$1, \$4, \$5, "${gene}", \$7}' \
+    > ${gene}.bed
     """
 }
 
 // subset the BAMs to only the driver regions
 process subset_bams_to_drivers {
-  tag "${meta.id}"
+  tag "${meta.id}_${gene}"
   label 'normal'
   input:
-    tuple val(meta), path(bam), path(bai)
-    path(drivers_bed)
+    tuple val(meta), path(bam), path(bai),
+          val(gene), path(gene_bed)
   output:
     tuple val(meta),
-          path("${meta.id}_subset.bam"), path("${meta.id}_subset.bam.bai")
-    path(drivers_bed)
+          path("${meta.id}_subset.bam"), path("${meta.id}_subset.bam.bai"),
+          val(gene), path(gene_bed)
   script:
     """
     module load samtools-1.19/python-3.12.0 
-    samtools view -L $drivers_bed -b $bam > ${meta.id}_subset.bam
+    samtools view -L $gene_bed -b $bam > ${meta.id}_subset.bam
     samtools index -@ ${task.cpus} ${meta.id}_subset.bam
     """
 }
 
 // split subsetted BAMs by cell, count coverage
 process get_coverage_per_cell {
-  tag "${meta.id}"
+  tag "${meta.id}_${gene}"
   label 'normal'
   publishDir "${params.out_dir}/", mode: "copy"
   errorStrategy 'ignore'
   input:
-    tuple val(meta), path(bam), path(bai)
-    path(drivers_bed)
+    tuple val(meta), path(bam), path(bai),
+          val(gene), path(gene_bed)
   output:
-    tuple val(meta), path("${meta.id}_driver_coverage_per_cell.tsv")
-    path(drivers_bed)
+    tuple val(meta), path("${meta.id}_${gene}_coverage_per_cell.tsv"),
+          val(gene), path(gene_bed)
   script:
     """
     module load samtools-1.19/python-3.12.0 
@@ -170,25 +164,26 @@ process get_coverage_per_cell {
       # combine coords and coverage
       paste \${gene}_coords.tsv \${gene}_cov.tsv > \${gene}_cov_per_cell.tsv
 
-    done < $drivers_bed
+    done < $gene_bed
 
     echo "combining outputs"
     ls *_cov_per_cell.tsv | head -1 | xargs head -1 \
-    > ${meta.id}_driver_coverage_per_cell.tsv
+    > ${meta.id}_${gene}_coverage_per_cell.tsv
     cat *_cov_per_cell.tsv | grep -vP "^chr\\tpos" \
-    >> ${meta.id}_driver_coverage_per_cell.tsv
+    >> ${meta.id}_${gene}_coverage_per_cell.tsv
     """
 }
 
 // plot coverage
 process plot_coverage {
-  tag "${meta.id}"
+  tag "${meta.id}_${gene}"
   label 'normal'
   publishDir "${params.out_dir}/", mode: "copy"
+  errorStrategy 'ignore'
   beforeScript "module load R/4.2.2"
   input:
-    tuple val(meta), path(cov)
-    path(drivers_bed)
+    tuple val(meta), path(cov), val(gene), path(gene_bed)
+    path(celltypes)
   output:
     path("*_coverage_plot.png")
   script:
@@ -200,15 +195,15 @@ process plot_coverage {
     library(ggplot2)
 
     # get gene strand info (to orient 5'/3' ends)
-    drivers <- 
-      readr::read_tsv("${drivers_bed}",
+    gene <- 
+      readr::read_tsv("${gene_bed}",
                       col_names = c("chr", "start", "end", "gene", "strand"))
 
     # get coverage data
     cov <- readr::read_tsv("${cov}")
 
     # get celltype annotations
-    annot <- readr::read_tsv("${params.celltypes}") %>%
+    annot <- readr::read_tsv("${celltypes}") %>%
       dplyr::filter(donor_id == "${meta.id}") %>%
       dplyr::select(CB = barcode_revc, celltype)
 
@@ -227,19 +222,19 @@ process plot_coverage {
         # plot coverage per base
         p_cov_per_base <-
           p_dat_g %>%
-          ggplot(aes(x = start, fill = `cov per cell`, group = `cov per cell`)) +
+          ggplot(aes(x = pos, fill = `cov per cell`, group = `cov per cell`)) +
           geom_bar(width = 1) +
           viridis::scale_fill_viridis() +
           facet_grid(celltype ~ ., space = "free_y", scales = "free_y") +
           theme_minimal() +
-          coord_cartesian(xlim = c(min(p_dat\$start), max(p_dat\$start)))
+          coord_cartesian(xlim = c(min(p_dat\$pos), max(p_dat\$pos)))
 
         # plot genotyping efficiency (% of cells with >= `min_cov` reads per position)
         genotyping_efficiency <-
           cov %>%
           dplyr::select(-c(chr, pos, gene)) %>%
           as.matrix() %>%
-          {rowMeans(. >= min_cov)}
+          {rowMeans(. >= ${params.min_cov})}
         p_genotyping_efficiency <-
           cbind(cov[, c("chr", "pos", "gene")], genotyping_efficiency) %>%
           ggplot(aes(x = pos, fill = genotyping_efficiency, y = 1)) +
@@ -270,24 +265,26 @@ workflow {
   // download or locally link bams
   if (params.location == "irods") {
     // download samplesheet from irods
-    bams = irods(samplesheet)
+    ch_sample_bam = irods(samplesheet)
   }
   else if (params.location == "local") {
     // samplesheet are locally available
-    sample_bams = local(samplesheet)
+    ch_sample_bam = local(samplesheet)
   }
+
+  // get celltypes
+  celltypes = file(params.celltypes)
   
   // get driver gene coords
   // TODO: create channel of genes, parallelise
-  // Channel.fromPath(params.drivers).splitText().set { ch_drivers }
-  // ch_drivers.view()
-
-  drivers_txt = file(params.drivers)
-  drivers_bed = get_driver_gene_coords(drivers_txt)
+  // drivers_txt = file(params.drivers)
+  ch_driver = Channel.fromPath(params.drivers).splitText().map{it -> it.trim()}
+  ch_driver_bed = get_driver_gene_coords(ch_driver)
 
   // plot coverage per base per gene per cell
-  subset_bams_to_drivers(sample_bams, drivers_bed)
+  ch_samples_x_drivers = ch_sample_bam.combine(ch_driver_bed)
+  subset_bams_to_drivers(ch_samples_x_drivers)
   get_coverage_per_cell(subset_bams_to_drivers.out)
-  plot_coverage(get_coverage_per_cell.out)
+  plot_coverage(get_coverage_per_cell.out, celltypes)
   
 }
