@@ -66,7 +66,7 @@ process get_driver_gene_coords {
   input:
     val(gene)
   output:
-    tuple val(gene), path("${gene}.bed")
+    tuple val(gene), path("${gene}.bed"), path("${gene}_exons.bed")
   script:
     """
     # get the gene coords from the gff3 file (chr start end gene strand)
@@ -74,6 +74,13 @@ process get_driver_gene_coords {
     | grep -w ${gene} \
     | awk -F"\\t" -v OFS="\\t" '\$3 == "gene" {print \$1, \$4, \$5, "${gene}", \$7}' \
     > ${gene}.bed
+
+    # get the transcript/exon coords from the gff3 file
+    echo -e "chr\\tstart\\tend\\tgene\\ttype\\tattributes" > ${gene}_exons.bed
+    zcat /lustre/scratch125/casm/team268im/at31/reference/gencode/gencode.v28.annotation.gff3.gz \
+    | grep -w ${gene} \
+    | awk -F"\t" -v OFS="\t" '\$3 == "exon" || \$3 == "transcript" || \$3 == "start_codon" {print \$1, \$4, \$5, "${gene}", \$3, \$9}' \
+    >> ${gene}_exons.bed
     """
 }
 
@@ -83,11 +90,11 @@ process subset_bams_to_drivers {
   label 'normal'
   input:
     tuple val(meta), path(bam), path(bai),
-          val(gene), path(gene_bed)
+          val(gene), path(gene_bed), path(exons_bed)
   output:
     tuple val(meta),
           path("${meta.id}_subset.bam"), path("${meta.id}_subset.bam.bai"),
-          val(gene), path(gene_bed)
+          val(gene), path(gene_bed), path(exons_bed)
   script:
     """
     module load samtools-1.19/python-3.12.0 
@@ -100,20 +107,21 @@ process subset_bams_to_drivers {
 process get_coverage_per_cell {
   tag "${meta.id}_${gene}"
   label 'normal'
-  publishDir "${params.out_dir}/", mode: "copy"
-  errorStrategy 'ignore'
+  publishDir "${params.out_dir}/",
+    mode: "copy",
+    pattern: "*_coverage_per_cell.tsv"
   input:
     tuple val(meta), path(bam), path(bai),
-          val(gene), path(gene_bed)
+          val(gene), path(gene_bed), path(exons_bed)
   output:
     tuple val(meta), path("${meta.id}_${gene}_coverage_per_cell.tsv"),
-          val(gene), path(gene_bed)
+          val(gene), path(gene_bed), path(exons_bed)
   script:
     """
     module load samtools-1.19/python-3.12.0 
 
     echo "getting cell barcodes"
-    mkdir cell_bams
+    rm -rf cell_bams ; mkdir -p cell_bams
     samtools view $bam | cut -f12 | cut -d':' -f3 \
     | awk '!x[\$0]++' \
     > cell_barcodes.txt
@@ -177,15 +185,18 @@ process get_coverage_per_cell {
 // plot coverage
 process plot_coverage {
   tag "${meta.id}_${gene}"
-  label 'normal'
-  publishDir "${params.out_dir}/", mode: "copy"
-  errorStrategy 'ignore'
+  label 'normal10gb'
+  publishDir "${params.out_dir}/",
+    mode: "copy",
+    pattern: "*{coverage_per_celltype.tsv,.pdf}"
+  errorStrategy 'retry'
   beforeScript "module load R/4.2.2"
   input:
-    tuple val(meta), path(cov), val(gene), path(gene_bed)
+    tuple val(meta), path(cov), val(gene), path(gene_bed), path(exons_bed)
     path(celltypes)
   output:
-    path("*_coverage_plot.png")
+    path("${meta.id}_${gene}_coverage_plot.pdf")
+    path("${meta.id}_${gene}_coverage_per_celltype.tsv")
   script:
     """
     #!/usr/bin/env Rscript
@@ -193,60 +204,179 @@ process plot_coverage {
     # libraries
     library(magrittr)
     library(ggplot2)
+    library(patchwork)
+    library(biomaRt)
 
-    # get gene strand info (to orient 5'/3' ends)
+    # get gene info (incl. strand to orient 5'/3' ends)
     gene <- 
       readr::read_tsv("${gene_bed}",
                       col_names = c("chr", "start", "end", "gene", "strand"))
 
+    # get exons (must wrangle from GFF3 attributes)
+    exons <-
+      readr::read_tsv("${exons_bed}") %>%
+      dplyr::mutate(
+        id = gsub(";.*", "", attributes)) %>%
+      tidyr::separate_longer_delim(cols = "attributes", delim = ";") %>%
+      tidyr::separate_wider_delim(
+        cols = "attributes", delim = "=", names = c("name", "value")) %>%
+      dplyr::filter(name %in% c("exon_id", "transcript_id", "transcript_type",
+                                "exon_number")) %>%
+      tidyr::pivot_wider()
+
     # get coverage data
-    cov <- readr::read_tsv("${cov}")
+    cov <-
+      readr::read_tsv("${cov}")
 
     # get celltype annotations
     annot <- readr::read_tsv("${celltypes}") %>%
       dplyr::filter(donor_id == "${meta.id}") %>%
-      dplyr::select(CB = barcode_revc, celltype)
+      dplyr::select(CB = barcode_revc, celltype) %>%
+      dplyr::filter(CB %in% colnames(cov))
 
-    # prep plotting data
-    p_dat <-
-      cov %>%
-      tidyr::pivot_longer(cols = -c(chr, pos, gene),
-                          names_to = "CB", values_to = "cov per cell") %>%
-      dplyr::inner_join(annot)
-    
-    p_dat %>%
-      {split(., .\$gene)} %>%
-      purrr::map(function(p_dat_g) {
-        gene <- unique(p_dat_g\$gene)
+    # get the counts of each unique value in each matrix row, per celltype
+    cov_per_ct <-
+      split(annot\$CB, annot\$celltype) %>%
+      purrr::map(function(CBs) {
 
-        # plot coverage per base
-        p_cov_per_base <-
-          p_dat_g %>%
-          ggplot(aes(x = pos, fill = `cov per cell`, group = `cov per cell`)) +
-          geom_bar(width = 1) +
-          viridis::scale_fill_viridis() +
-          facet_grid(celltype ~ ., space = "free_y", scales = "free_y") +
-          theme_minimal() +
-          coord_cartesian(xlim = c(min(p_dat\$pos), max(p_dat\$pos)))
-
-        # plot genotyping efficiency (% of cells with >= `min_cov` reads per position)
-        genotyping_efficiency <-
+        # get a matrix of reads in the celltype
+        mat <- 
           cov %>%
-          dplyr::select(-c(chr, pos, gene)) %>%
-          as.matrix() %>%
-          {rowMeans(. >= ${params.min_cov})}
-        p_genotyping_efficiency <-
-          cbind(cov[, c("chr", "pos", "gene")], genotyping_efficiency) %>%
-          ggplot(aes(x = pos, fill = genotyping_efficiency, y = 1)) +
-          geom_col(width = 1) +
-          theme_minimal() +
-          coord_cartesian(xlim = c(min(p_dat\$pos), max(p_dat\$pos)))
+          dplyr::select(dplyr::any_of(CBs)) %>%
+          as.matrix()
 
-        png(paste0("${meta.id}_", gene, "_coverage_plot.png"))
-        cowplot::plot_grid(p_cov_per_base, p_genotyping_efficiency, ncol = 1,
-                          rel_heights = c(4, 1), align = "v", axis = "b")
-        dev.off()
-      })
+        if (ncol(mat) > 0) {
+          # get counts of each unique value in each row
+          counts <-
+            lapply(1:nrow(mat), function(x) {
+              table(mat[x, ]) %>%
+                tibble::enframe(name = "coverage", value = "n_cells") %>%
+                cbind(cov[x, c("chr", "pos", "gene")], .)
+            }) %>%
+            dplyr::bind_rows() %>%
+            tibble::as_tibble() %>%
+            dplyr::mutate(coverage = as.numeric(coverage),
+                          n_cells = as.numeric(n_cells),
+                          total_cells = length(CBs))
+        }
+
+      }) %>%
+      dplyr::bind_rows(.id = "celltype") %>%
+      dplyr::mutate(celltype = paste0(celltype, " (", total_cells, ")") %>%
+                      forcats::fct_reorder(total_cells, .desc = T))
+    
+    # save
+    cov_per_ct %>%
+      readr::write_tsv("${meta.id}_${gene}_coverage_per_celltype.tsv")
+
+    # initialise list of plots
+    p <- list()
+    p_theme <- theme_minimal()
+    p_subtitle <- paste0("${meta.id} ${gene} (", gene\$strand, 
+                         " strand, min coverage = ${params.min_cov})")
+
+    # plot protein-coding transcripts
+    p[["transcripts"]] <-
+      exons %>%
+      dplyr::filter(transcript_type == "protein_coding") %>%
+      dplyr::mutate(exon_number = as.numeric(exon_number),
+                    exon_alternating = as.character(exon_number %% 2)) %>%
+      ggplot(aes(x = start, xend = end,
+                 y = transcript_id, yend = transcript_id, size = type)) +
+      geom_segment(data = . %>% dplyr::filter(type != "start_codon"),
+                   aes(colour = exon_alternating)) +
+      scale_size_manual(values = c("transcript" = 0.5, "exon" = 3)) +
+      scale_colour_manual(values = c("1" = "royalblue4", "0" = "steelblue3")) +
+      geom_point(data = . %>% dplyr::filter(type == "start_codon"),
+                 size = 4, colour = "lightskyblue1") +
+      geom_point(data = . %>% dplyr::filter(type == "start_codon"),
+                 shape = 83, size = 3, colour = "blue4") +
+      p_theme +
+      theme(axis.text.y = element_blank()) +
+      guides(colour = "none") +
+      labs(x = "position")
+
+    # plot coverage per base
+    p[["cov"]] <-
+      cov_per_ct %>%
+      dplyr::arrange(-coverage) %>%
+      dplyr::mutate(coverage = ifelse(coverage < ${params.min_cov}, NA, coverage)) %>%
+      ggplot(aes(x = pos, y = n_cells, fill = coverage, colour = coverage)) +
+      geom_col(position = "stack", width = 1, linewidth = 0.005) +
+      viridis::scale_fill_viridis(na.value = "grey") +
+      viridis::scale_colour_viridis(na.value = "grey") +
+      facet_grid(celltype ~ ., space = "free_y", scales = "free_y") +
+      p_theme +
+      theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off",
+            axis.text.y = element_text(size = 3),
+            axis.title.x = element_blank()) +
+      labs(title = "Coverage per cell", subtitle = p_subtitle, y = "n cells")
+    
+    # plot overall genotyping efficiency below celltype breakdown
+    p[["ge"]] <-
+      cov_per_ct %>%
+      dplyr::group_by(pos) %>%
+      dplyr::summarise(`genotyping\\nefficiency (%)` = 100 *
+                         sum(n_cells[coverage >= 2]) / sum(n_cells)) %>%
+      ggplot(aes(x = pos, y = 1, fill = `genotyping\\nefficiency (%)`,
+                 colour = `genotyping\\nefficiency (%)`)) +
+      geom_tile(width = 1, linewidth = 0.005) +
+      viridis::scale_fill_viridis() +
+      viridis::scale_colour_viridis() +
+      p_theme +
+      theme(axis.text.y = element_blank(),
+            axis.title.x = element_blank(),
+            axis.title.y = element_blank(),
+            panel.grid.major.y = element_blank(),
+            panel.grid.minor.y = element_blank())
+
+    # plot genotyping efficiency (% of cells with >= `min_cov` reads per position)
+    p[["ge_per_ct"]] <-
+      cov_per_ct %>%
+      dplyr::group_by(celltype, pos, total_cells) %>%
+      dplyr::summarise(`genotyping\\nefficiency (%)` =
+                         100 *
+                         sum(n_cells[coverage >= ${params.min_cov}]) /
+                         sum(n_cells)) %>%
+      ggplot(aes(x = pos, y = total_cells, fill = `genotyping\\nefficiency (%)`,
+                 colour = `genotyping\\nefficiency (%)`)) +
+      geom_col(width = 1, linewidth = 0.005) +
+      viridis::scale_fill_viridis() +
+      viridis::scale_colour_viridis() +
+      facet_grid(celltype ~ ., space = "free_y", scales = "free_y") +
+      p_theme +
+      theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off",
+            axis.text.y = element_blank(), axis.title.x = element_blank()) +
+      labs(title = "Genotyping efficiency per celltype",
+           subtitle = p_subtitle)
+
+    # plot average coverage per base
+    p[["avg_cov"]] <-
+      cov_per_ct %>%
+      dplyr::group_by(celltype, pos) %>%
+      dplyr::summarise(mean_coverage = mean(coverage),
+                       median_coverage = median(coverage)) %>%
+      ggplot(aes(x = pos, y = median_coverage)) +
+      geom_line() +
+      facet_grid(celltype ~ ., scales = "free_y") +
+      p_theme +
+      labs(title = "Median coverage per celltype per position",
+           x = "position", y = "coverage")
+
+    # if strand is "-", flip the x axis
+    if (gene\$strand == "-") {
+      p <- lapply(p, function(x) x + scale_x_reverse())
+    }
+
+    # save plots
+    pdf("${meta.id}_${gene}_coverage_plot.pdf", onefile = T)
+    p[["cov"]] / p[["ge"]] / p[["transcripts"]] +
+      plot_layout(heights = c(4, 1, 1))
+    p[["ge_per_ct"]] / p[["transcripts"]] +
+      plot_layout(heights = c(4, 1))
+    p[["avg_cov"]] / p[["transcripts"]] +
+      plot_layout(heights = c(4, 1))
+    dev.off()
     """
 }
 
@@ -276,15 +406,14 @@ workflow {
   celltypes = file(params.celltypes)
   
   // get driver gene coords
-  // TODO: create channel of genes, parallelise
-  // drivers_txt = file(params.drivers)
   ch_driver = Channel.fromPath(params.drivers).splitText().map{it -> it.trim()}
-  ch_driver_bed = get_driver_gene_coords(ch_driver)
+  get_driver_gene_coords(ch_driver)
 
   // plot coverage per base per gene per cell
-  ch_samples_x_drivers = ch_sample_bam.combine(ch_driver_bed)
+  ch_samples_x_drivers = ch_sample_bam.combine(get_driver_gene_coords.out)
   subset_bams_to_drivers(ch_samples_x_drivers)
   get_coverage_per_cell(subset_bams_to_drivers.out)
-  plot_coverage(get_coverage_per_cell.out, celltypes)
+  plot_coverage(get_coverage_per_cell.out,
+                celltypes)
   
 }
