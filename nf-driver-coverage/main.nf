@@ -17,21 +17,21 @@ if (params.validate_params) {
 // Then either retrieve the BAI or make one via indexing
 // The maxForks of 10 was set after asking jc18 about best iRODS practices
 process irods {
-  tag "${meta.id}"
+  tag "${meta.run}"
   maxForks 10
   label 'normal4core'
   input:
     tuple val(meta), val(bam)
   output:
-    tuple val(meta), path("${meta.id}.bam"), path("${meta.id}.bam.bai"), emit: bams
+    tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai"), emit: bams
   script:
     """
-    iget -K ${bam} ${meta.id}.bam
+    iget -K ${bam} ${meta.run}.bam
     if [[ `ils ${bam}.bai | wc -l` == 1 ]]
     then
-        iget -K ${bam}.bai ${meta.id}.bam.bai
+        iget -K ${bam}.bai ${meta.run}.bam.bai
     else
-        samtools index -@ ${task.cpus} ${meta.id}.bam
+        samtools index -@ ${task.cpus} ${meta.run}.bam
     fi
     """
 }
@@ -39,22 +39,22 @@ process irods {
 // The equivalent of an irods download, but for a local copy of samplesheet
 // Symlink the BAM/BAI appropriately so they're named the right thing for downstream
 process local {
-  tag "${meta.id}"
+  tag "${meta.run}"
   maxForks 10
   label 'normal4core'
   errorStrategy = {task.attempt <= 1 ? 'retry' : 'ignore'}
   input:
     tuple val(meta), val(bam)
   output:
-    tuple val(meta), path("${meta.id}.bam"), path("${meta.id}.bam.bai")
+    tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai")
   script:
     """
     # create local symbolic link 
-    ln -s ${bam} ${meta.id}.bam
+    ln -s ${bam} ${meta.run}.bam
     if [ -f "${bam}.bai" ] ; then
-        ln -s ${bam}.bai ${meta.id}.bam.bai
+        ln -s ${bam}.bai ${meta.run}.bam.bai
     else
-        samtools index -@ ${task.cpus} ${meta.id}.bam
+        samtools index -@ ${task.cpus} ${meta.run}.bam
     fi
     """
 }
@@ -86,35 +86,36 @@ process get_driver_gene_coords {
 
 // subset the BAMs to only the driver regions
 process subset_bams_to_drivers {
-  tag "${meta.id}_${gene}"
+  tag "${meta.run}_${gene}"
   label 'normal'
+  errorStrategy 'ignore'
   input:
     tuple val(meta), path(bam), path(bai),
           val(gene), path(gene_bed), path(exons_bed)
   output:
     tuple val(meta),
-          path("${meta.id}_subset.bam"), path("${meta.id}_subset.bam.bai"),
+          path("${meta.run}_subset.bam"), path("${meta.run}_subset.bam.bai"),
           val(gene), path(gene_bed), path(exons_bed)
   script:
     """
     module load samtools-1.19/python-3.12.0 
-    samtools view -L $gene_bed -b $bam > ${meta.id}_subset.bam
-    samtools index -@ ${task.cpus} ${meta.id}_subset.bam
+    samtools view -L $gene_bed -b $bam > ${meta.run}_subset.bam
+    samtools index -@ ${task.cpus} ${meta.run}_subset.bam
     """
 }
 
 // split subsetted BAMs by cell, count coverage
 process get_coverage_per_cell {
-  tag "${meta.id}_${gene}"
+  tag "${meta.run}_${gene}"
   label 'normal'
-  publishDir "${params.out_dir}/",
+  publishDir "${params.out_dir}/${meta.run}/",
     mode: "copy",
     pattern: "*_coverage_per_cell.tsv"
   input:
     tuple val(meta), path(bam), path(bai),
           val(gene), path(gene_bed), path(exons_bed)
   output:
-    tuple val(meta), path("${meta.id}_${gene}_coverage_per_cell.tsv"),
+    tuple val(meta), path("${meta.run}_${gene}_coverage_per_cell.tsv"),
           val(gene), path(gene_bed), path(exons_bed)
   script:
     """
@@ -176,17 +177,17 @@ process get_coverage_per_cell {
 
     echo "combining outputs"
     ls *_cov_per_cell.tsv | head -1 | xargs head -1 \
-    > ${meta.id}_${gene}_coverage_per_cell.tsv
+    > ${meta.run}_${gene}_coverage_per_cell.tsv
     cat *_cov_per_cell.tsv | grep -vP "^chr\\tpos" \
-    >> ${meta.id}_${gene}_coverage_per_cell.tsv
+    >> ${meta.run}_${gene}_coverage_per_cell.tsv
     """
 }
 
 // plot coverage
 process plot_coverage {
-  tag "${meta.id}_${gene}"
+  tag "${meta.run}_${gene}"
   label 'normal10gb'
-  publishDir "${params.out_dir}/",
+  publishDir "${params.out_dir}/${meta.run}/${gene}/",
     mode: "copy",
     pattern: "*{coverage_per_celltype.tsv,.pdf}"
   errorStrategy 'retry'
@@ -195,8 +196,8 @@ process plot_coverage {
     tuple val(meta), path(cov), val(gene), path(gene_bed), path(exons_bed)
     path(celltypes)
   output:
-    path("${meta.id}_${gene}_coverage_plot.pdf")
-    path("${meta.id}_${gene}_coverage_per_celltype.tsv")
+    path("*_plot.pdf")
+    path("${meta.run}_${gene}_coverage_per_celltype.tsv")
   script:
     """
     #!/usr/bin/env Rscript
@@ -222,7 +223,10 @@ process plot_coverage {
         cols = "attributes", delim = "=", names = c("name", "value")) %>%
       dplyr::filter(name %in% c("exon_id", "transcript_id", "transcript_type",
                                 "exon_number")) %>%
-      tidyr::pivot_wider()
+      tidyr::pivot_wider() %>%
+      # move protein-coding to top
+      dplyr::mutate(transcript_type = forcats::fct_relevel(transcript_type,
+                                                           "protein_coding"))
 
     # get coverage data
     cov <-
@@ -267,18 +271,19 @@ process plot_coverage {
     
     # save
     cov_per_ct %>%
-      readr::write_tsv("${meta.id}_${gene}_coverage_per_celltype.tsv")
+      readr::write_tsv("${meta.run}_${gene}_coverage_per_celltype.tsv")
 
     # initialise list of plots
     p <- list()
     p_theme <- theme_minimal()
-    p_subtitle <- paste0("${meta.id} ${gene} (", gene\$strand, 
-                         " strand, min coverage = ${params.min_cov})")
+    p_subtitle <- paste0("${meta.run} ${gene} (", gene\$strand, " strand, ",
+                         prettyNum(gene\$end - gene\$start, big.mark = ",",
+                                   scientific = FALSE),
+                         "bp, min coverage = ${params.min_cov})")
 
     # plot protein-coding transcripts
     p[["transcripts"]] <-
       exons %>%
-      dplyr::filter(transcript_type == "protein_coding") %>%
       dplyr::mutate(exon_number = as.numeric(exon_number),
                     exon_alternating = as.character(exon_number %% 2)) %>%
       ggplot(aes(x = start, xend = end,
@@ -287,12 +292,15 @@ process plot_coverage {
                    aes(colour = exon_alternating)) +
       scale_size_manual(values = c("transcript" = 0.5, "exon" = 3)) +
       scale_colour_manual(values = c("1" = "royalblue4", "0" = "steelblue3")) +
+      # plot the start codon
       geom_point(data = . %>% dplyr::filter(type == "start_codon"),
-                 size = 4, colour = "lightskyblue1") +
+                 size = 3, colour = "lightskyblue1") +
       geom_point(data = . %>% dplyr::filter(type == "start_codon"),
-                 shape = 83, size = 3, colour = "blue4") +
+                 shape = 83, size = 2, colour = "blue4") +
+      facet_grid(transcript_type ~ ., space = "free_y", scales = "free_y") +
       p_theme +
-      theme(axis.text.y = element_blank()) +
+      theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off",
+            axis.text.y = element_blank()) +
       guides(colour = "none") +
       labs(x = "position")
 
@@ -300,17 +308,31 @@ process plot_coverage {
     p[["cov"]] <-
       cov_per_ct %>%
       dplyr::arrange(-coverage) %>%
-      dplyr::mutate(coverage = ifelse(coverage < ${params.min_cov}, NA, coverage)) %>%
-      ggplot(aes(x = pos, y = n_cells, fill = coverage, colour = coverage)) +
-      geom_col(position = "stack", width = 1, linewidth = 0.005) +
+      ggplot(aes(x = pos, y = n_cells)) +
+      # plot grey background (0 coverage)
+      geom_col(fill = NA, colour = "grey", position = "stack", width = 1,
+               linewidth = 0.0001) +
+      geom_col(fill = "grey86", position = "stack", width = 1) +
+      # plot dark grey background (0 < cov < min_cov)
+      geom_col(data = . %>% dplyr::filter(coverage > 0, coverage < ${params.min_cov}),
+               fill = NA, colour = "darkgrey", position = "stack", width = 1,
+               linewidth = 0.0001) +
+      geom_col(data = . %>% dplyr::filter(coverage > 0, coverage < ${params.min_cov}),
+               fill = "grey48", position = "stack", width = 1) +
+      # plot coverage
+      geom_col(data = . %>% dplyr::filter(coverage >= ${params.min_cov}),
+               aes(colour = coverage), position = "stack", width = 1,
+               linewidth = 0.0001) +
+      geom_col(data = . %>% dplyr::filter(coverage >= ${params.min_cov}),
+               aes(fill = coverage), position = "stack", width = 1) +
       viridis::scale_fill_viridis(na.value = "grey") +
-      viridis::scale_colour_viridis(na.value = "grey") +
       facet_grid(celltype ~ ., space = "free_y", scales = "free_y") +
       p_theme +
       theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off",
             axis.text.y = element_text(size = 3),
             axis.title.x = element_blank()) +
-      labs(title = "Coverage per cell", subtitle = p_subtitle, y = "n cells")
+      labs(title = "Coverage per cell", subtitle = p_subtitle, y = "n cells") +
+      guides(colour = "none")
     
     # plot overall genotyping efficiency below celltype breakdown
     p[["ge"]] <-
@@ -320,7 +342,7 @@ process plot_coverage {
                          sum(n_cells[coverage >= 2]) / sum(n_cells)) %>%
       ggplot(aes(x = pos, y = 1, fill = `genotyping\\nefficiency (%)`,
                  colour = `genotyping\\nefficiency (%)`)) +
-      geom_tile(width = 1, linewidth = 0.005) +
+      geom_tile(width = 1, linewidth = 0.001) +
       viridis::scale_fill_viridis() +
       viridis::scale_colour_viridis() +
       p_theme +
@@ -360,7 +382,9 @@ process plot_coverage {
       geom_line() +
       facet_grid(celltype ~ ., scales = "free_y") +
       p_theme +
+      theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off") +
       labs(title = "Median coverage per celltype per position",
+           subtitle = p_subtitle,
            x = "position", y = "coverage")
 
     # if strand is "-", flip the x axis
@@ -369,11 +393,17 @@ process plot_coverage {
     }
 
     # save plots
-    pdf("${meta.id}_${gene}_coverage_plot.pdf", onefile = T)
+    pdf("${meta.run}_${gene}_coverage_plot.pdf")
     p[["cov"]] / p[["ge"]] / p[["transcripts"]] +
-      plot_layout(heights = c(4, 1, 1))
+      plot_layout(heights = c(4, 0.5, 2))
+    dev.off()
+    
+    pdf("${meta.run}_${gene}_genotyping_efficiency_plot.pdf")
     p[["ge_per_ct"]] / p[["transcripts"]] +
       plot_layout(heights = c(4, 1))
+    dev.off()
+
+    pdf("${meta.run}_${gene}_median_coverage_plot.pdf")
     p[["avg_cov"]] / p[["transcripts"]] +
       plot_layout(heights = c(4, 1))
     dev.off()
@@ -387,7 +417,8 @@ workflow {
   Channel.fromPath(params.samplesheet, checkIfExists: true)
   | splitCsv(header: true)
   | map { row ->
-      meta = row.subMap('id') 
+      run = row.kit + "_" + row.seq_type + "_" + row.id
+      meta = [id:row.id, seq_type:row.seq_type, kit:row.kit, run:run]
       [meta, file(row.bam, checkIfExists: true)]
   }
   | set { samplesheet }
