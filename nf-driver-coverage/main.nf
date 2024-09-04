@@ -74,8 +74,12 @@ process check_bam {
   input:
   tuple val(meta), path(bam), path(bai)
 
+  output:
+  tuple val(meta), path(bam), path(bai)
+
   script:
   """
+  module load samtools-1.19/python-3.12.0 
   samtools quickcheck $bam
   """
 }
@@ -136,7 +140,7 @@ process get_coverage_per_cell {
   tag "${meta.run}_${gene}"
   label 'normal'
   errorStrategy 'ignore'
-  publishDir "${params.out_dir}/${meta.run}/",
+  publishDir "${params.out_dir}/${meta.run}/${gene}/",
     mode: "copy",
     pattern: "*_coverage_per_cell.tsv"
 
@@ -155,7 +159,7 @@ process get_coverage_per_cell {
   echo "getting cell barcodes"
   # get unique cell barcodes, trim CB:Z: prefix and -1 suffix
   samtools view $bam | cut -f12- | tr "\\t" "\\n" |
-  grep "CB:Z:" | sed 's/^CB:Z://g' | sed 's/-1\$//g' | awk '!x[\$0]++' \
+  grep "CB:Z:" | sed 's/^CB:Z://g' | awk '!x[\$0]++' \
   > cell_barcodes.txt
 
   echo "creating a bam per cell"
@@ -207,6 +211,9 @@ process get_coverage_per_cell {
 
   done < $gene_bed
 
+  echo "cleaning up cell_bams/*"
+  rm -rf cell_bams
+
   echo "combining outputs"
   ls *_cov_per_cell.tsv | head -1 | xargs head -1 \
   > ${meta.run}_${gene}_coverage_per_cell.tsv
@@ -219,18 +226,19 @@ process get_coverage_per_cell {
 process plot_coverage {
   tag "${meta.run}_${gene}"
   label 'normal10gb'
+  maxRetries 10
   publishDir "${params.out_dir}/${meta.run}/${gene}/",
     mode: "copy",
-    pattern: "*{coverage_per_celltype.tsv,.pdf}"
+    pattern: "*{coverage_per_celltype.tsv,.pdf,.png}"
   errorStrategy 'retry'
-  beforeScript "module load R/4.2.2"
+  beforeScript "module load ISG/rocker/rver/4.4.0; export R_LIBS_USER=~/R-tmp-4.4"
 
   input:
   tuple val(meta), path(cov), val(gene), path(gene_bed), path(exons_bed)
   path(celltypes)
   
   output:
-  path("*_plot.pdf")
+  path("*_plot.${params.plot_device}")
   path("${meta.run}_${gene}_coverage_per_celltype.tsv")
 
   script:
@@ -249,6 +257,16 @@ process plot_coverage {
     readr::read_tsv("${gene_bed}",
                     col_names = c("chr", "start", "end", "gene", "strand"))
 
+  # get canonical transcripts for genes
+  mart <- useEnsembl("ensembl", dataset = "hsapiens_gene_ensembl")
+  canonical_transcript <-
+    getBM(attributes = c("ensembl_transcript_id", "transcript_is_canonical"),
+          filters = "hgnc_symbol",
+          values = "${gene}",
+          mart = mart) %>%
+    dplyr::filter(transcript_is_canonical == 1) %>%
+    dplyr::pull(ensembl_transcript_id)
+
   # get exons (must wrangle from GFF3 attributes)
   exons <-
     readr::read_tsv("${exons_bed}") %>%
@@ -260,9 +278,14 @@ process plot_coverage {
     dplyr::filter(name %in% c("exon_id", "transcript_id", "transcript_type",
                               "exon_number")) %>%
     tidyr::pivot_wider() %>%
-    # move protein-coding to top
-    dplyr::mutate(transcript_type = forcats::fct_relevel(transcript_type,
-                                                          "protein_coding"))
+    dplyr::mutate(
+      transcript_id = gsub("\\\\..*", "", transcript_id),
+      # mark canonical, move canonical + protein-coding to top of plot
+      transcript_type = dplyr::case_when(
+        transcript_id == canonical_transcript ~ paste0("canonical_",
+                                                       transcript_type),
+        TRUE ~ transcript_type) %>%
+      forcats::fct_relevel("canonical_protein_coding", "protein_coding"))
 
   # get coverage data, remove `-1` suffix from colnames
   cov <-
@@ -271,7 +294,7 @@ process plot_coverage {
 
   # get celltype annotations
   annot <- readr::read_tsv("${celltypes}") %>%
-    dplyr::filter(donor_id == "${meta.id}") %>%
+    dplyr::filter(id == "${meta.id}") %>%
     dplyr::select(CB = ${barcode_col}, celltype) %>%
     dplyr::filter(CB %in% colnames(cov))
 
@@ -430,20 +453,17 @@ process plot_coverage {
   }
 
   # save plots
-  pdf("${meta.run}_${gene}_coverage_plot.pdf")
-  p[["cov"]] / p[["ge"]] / p[["transcripts"]] +
-    plot_layout(heights = c(4, 0.5, 2))
-  dev.off()
+  ggsave("${meta.run}_${gene}_coverage_plot.${params.plot_device}",
+         p[["cov"]] / p[["ge"]] / p[["transcripts"]] + plot_layout(heights = c(4, 0.5, 2)),
+         dpi = 200)
   
-  pdf("${meta.run}_${gene}_genotyping_efficiency_plot.pdf")
-  p[["ge_per_ct"]] / p[["transcripts"]] +
-    plot_layout(heights = c(4, 1))
-  dev.off()
+  ggsave("${meta.run}_${gene}_genotyping_efficiency_plot.${params.plot_device}",
+         p[["ge_per_ct"]] / p[["transcripts"]] + plot_layout(heights = c(4, 1)),
+         dpi = 200)
 
-  pdf("${meta.run}_${gene}_median_coverage_plot.pdf")
-  p[["avg_cov"]] / p[["transcripts"]] +
-    plot_layout(heights = c(4, 1))
-  dev.off()
+  ggsave("${meta.run}_${gene}_median_coverage_plot.${params.plot_device}",
+         p[["avg_cov"]] / p[["transcripts"]] + plot_layout(heights = c(4, 1)),
+          dpi = 200)
   """
 }
 
