@@ -22,10 +22,11 @@ process irods {
   label 'normal4core'
 
   input:
-  tuple val(meta), val(bam)
+  tuple val(meta), val(bam), path(celltypes)
   
   output:
-  tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai"), emit: bams
+  tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai"),
+        path(celltypes)
   
   script:
   """
@@ -48,10 +49,11 @@ process local {
   errorStrategy = {task.attempt <= 1 ? 'retry' : 'ignore'}
 
   input:
-  tuple val(meta), val(bam)
+  tuple val(meta), val(bam), path(celltypes)
 
   output:
-  tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai")
+  tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai"),
+        path(celltypes)
 
   script:
   """
@@ -72,10 +74,10 @@ process check_bam {
   errorStrategy 'ignore'
 
   input:
-  tuple val(meta), path(bam), path(bai)
+  tuple val(meta), path(bam), path(bai), path(celltypes)
 
   output:
-  tuple val(meta), path(bam), path(bai)
+  tuple val(meta), path(bam), path(bai), path(celltypes)
 
   script:
   """
@@ -119,12 +121,13 @@ process subset_bams_to_drivers {
   errorStrategy 'ignore'
 
   input:
-  tuple val(meta), path(bam), path(bai),
+  tuple val(meta), path(bam), path(bai), path(celltypes),
         val(gene), path(gene_bed), path(exons_bed)
 
   output:
   tuple val(meta),
         path("${meta.run}_subset.bam"), path("${meta.run}_subset.bam.bai"),
+        path(celltypes),
         val(gene), path(gene_bed), path(exons_bed)
 
   script:
@@ -139,17 +142,18 @@ process subset_bams_to_drivers {
 process get_coverage_per_cell {
   tag "${meta.run}_${gene}"
   label 'normal'
-  errorStrategy 'ignore'
+  errorStrategy 'retry'
   publishDir "${params.out_dir}/${meta.run}/${gene}/",
     mode: "copy",
     pattern: "*_coverage_per_cell.tsv"
 
   input:
-  tuple val(meta), path(bam), path(bai),
+  tuple val(meta), path(bam), path(bai), path(celltypes),
         val(gene), path(gene_bed), path(exons_bed)
 
   output:
   tuple val(meta), path("${meta.run}_${gene}_coverage_per_cell.tsv"),
+        path(celltypes),
         val(gene), path(gene_bed), path(exons_bed)
 
   script:
@@ -160,7 +164,7 @@ process get_coverage_per_cell {
   # get unique cell barcodes, trim CB:Z: prefix and -1 suffix
   samtools view $bam | cut -f12- | tr "\\t" "\\n" |
   grep "CB:Z:" | sed 's/^CB:Z://g' | awk '!x[\$0]++' \
-  > cell_barcodes.txt
+  > cell_barcodes.txt-1
 
   echo "creating a bam per cell"
   rm -rf cell_bams ; mkdir -p cell_bams
@@ -234,8 +238,8 @@ process plot_coverage {
   beforeScript "module load ISG/rocker/rver/4.4.0; export R_LIBS_USER=~/R-tmp-4.4"
 
   input:
-  tuple val(meta), path(cov), val(gene), path(gene_bed), path(exons_bed)
-  path(celltypes)
+  tuple val(meta), path(cov), path(celltypes),
+        val(gene), path(gene_bed), path(exons_bed)
   
   output:
   path("*_plot.${params.plot_device}")
@@ -257,16 +261,6 @@ process plot_coverage {
     readr::read_tsv("${gene_bed}",
                     col_names = c("chr", "start", "end", "gene", "strand"))
 
-  # get canonical transcripts for genes
-  mart <- useEnsembl("ensembl", dataset = "hsapiens_gene_ensembl")
-  canonical_transcript <-
-    getBM(attributes = c("ensembl_transcript_id", "transcript_is_canonical"),
-          filters = "hgnc_symbol",
-          values = "${gene}",
-          mart = mart) %>%
-    dplyr::filter(transcript_is_canonical == 1) %>%
-    dplyr::pull(ensembl_transcript_id)
-
   # get exons (must wrangle from GFF3 attributes)
   exons <-
     readr::read_tsv("${exons_bed}") %>%
@@ -279,13 +273,8 @@ process plot_coverage {
                               "exon_number")) %>%
     tidyr::pivot_wider() %>%
     dplyr::mutate(
-      transcript_id = gsub("\\\\..*", "", transcript_id),
-      # mark canonical, move canonical + protein-coding to top of plot
-      transcript_type = dplyr::case_when(
-        transcript_id == canonical_transcript ~ paste0("canonical_",
-                                                       transcript_type),
-        TRUE ~ transcript_type) %>%
-      forcats::fct_relevel("canonical_protein_coding", "protein_coding"))
+      # move protein-coding to top of plot
+      transcript_type = forcats::fct_relevel(transcript_type, "protein_coding"))
 
   # get coverage data, remove `-1` suffix from colnames
   cov <-
@@ -293,14 +282,13 @@ process plot_coverage {
   colnames(cov) <- colnames(cov) %>% stringr::str_remove("-1\$")
 
   # get celltype annotations
-  annot <- readr::read_tsv("${celltypes}") %>%
-    dplyr::filter(id == "${meta.id}") %>%
-    dplyr::select(CB = ${barcode_col}, celltype) %>%
-    dplyr::filter(CB %in% colnames(cov))
+  celltypes <-
+    readr::read_csv("${celltypes}") %>%
+    dplyr::filter(barcode_${meta.kit} %in% colnames(cov))
 
   # get the counts of each unique value in each matrix row, per celltype
   cov_per_ct <-
-    split(annot\$CB, annot\$celltype) %>%
+    split(celltypes\$barcode_${meta.kit}, celltypes\$celltype) %>%
     purrr::map(function(CBs) {
 
       # get a matrix of reads in the celltype
@@ -476,25 +464,24 @@ workflow {
   | map { row ->
       run = row.kit + "_" + row.seq_type + "_" + row.id
       meta = [id:row.id, seq_type:row.seq_type, kit:row.kit, run:run]
-      [meta, file(row.bam, checkIfExists: true)]
+      [meta,
+       file(row.bam, checkIfExists: true),
+       file(row.celltypes, checkIfExists: true)]
   }
-  | set { samplesheet }
+  | set { input }
   
   // download or locally link bams
   if (params.location == "irods") {
-    // download samplesheet from irods
-    ch_bam = irods(samplesheet)
+    // download input from irods
+    ch_bam = irods(input)
   }
   else if (params.location == "local") {
-    // samplesheet are locally available
-    ch_bam = local(samplesheet)
+    // input are locally available
+    ch_bam = local(input)
   }
 
   // check bam is not truncated before proceeding
   ch_checked_bam = check_bam(ch_bam)
-
-  // get celltypes
-  celltypes = file(params.celltypes)
   
   // get driver gene coords
   ch_driver = Channel.fromPath(params.drivers).splitText().map{it -> it.trim()}
@@ -504,7 +491,6 @@ workflow {
   ch_samples_x_drivers = ch_checked_bam.combine(get_driver_gene_coords.out)
   subset_bams_to_drivers(ch_samples_x_drivers)
   get_coverage_per_cell(subset_bams_to_drivers.out)
-  plot_coverage(get_coverage_per_cell.out,
-                celltypes)
+  plot_coverage(get_coverage_per_cell.out)
   
 }
