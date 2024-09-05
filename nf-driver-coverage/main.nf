@@ -93,6 +93,7 @@ process get_driver_gene_coords {
 
   input:
   val(gene)
+  path(gencode_gff3)
 
   output:
   tuple val(gene), path("${gene}.bed"), path("${gene}_exons.bed")
@@ -100,14 +101,14 @@ process get_driver_gene_coords {
   script:
   """
   # get the gene coords from the gff3 file (chr start end gene strand)
-  zcat /lustre/scratch125/casm/team268im/at31/reference/gencode/gencode.v28.annotation.gff3.gz \
+  zcat ${gencode_gff3} \
   | grep -w ${gene} \
   | awk -F"\\t" -v OFS="\\t" '\$3 == "gene" {print \$1, \$4, \$5, "${gene}", \$7}' \
   > ${gene}.bed
 
   # get the transcript/exon coords from the gff3 file
   echo -e "chr\\tstart\\tend\\tgene\\ttype\\tattributes" > ${gene}_exons.bed
-  zcat /lustre/scratch125/casm/team268im/at31/reference/gencode/gencode.v28.annotation.gff3.gz \
+  zcat ${gencode_gff3} \
   | grep -w ${gene} \
   | awk -F"\t" -v OFS="\t" '\$3 == "exon" || \$3 == "transcript" || \$3 == "start_codon" {print \$1, \$4, \$5, "${gene}", \$3, \$9}' \
   >> ${gene}_exons.bed
@@ -483,9 +484,12 @@ workflow {
   // check bam is not truncated before proceeding
   ch_checked_bam = check_bam(ch_bam)
   
+  // get gencode gff3
+  gencode_gff3 = file(params.gencode_gff3)
+
   // get driver gene coords
   ch_driver = Channel.fromPath(params.drivers).splitText().map{it -> it.trim()}
-  get_driver_gene_coords(ch_driver)
+  get_driver_gene_coords(ch_driver, gencode_gff3)
 
   // plot coverage per base per gene per cell
   ch_samples_x_drivers = ch_checked_bam.combine(get_driver_gene_coords.out)
