@@ -100,17 +100,18 @@ process get_driver_gene_coords {
 
   script:
   """
-  # get the gene coords from the gff3 file (chr start end gene strand)
-  zcat ${gencode_gff3} \
-  | grep -w ${gene} \
-  | awk -F"\\t" -v OFS="\\t" '\$3 == "gene" {print \$1, \$4, \$5, "${gene}", \$7}' \
+  # get the proteinc-coding gene coords from the gff3 file (chr start end gene strand)
+  zcat ${gencode_gff3} \\
+  | grep -w ${gene} \\
+  | grep -w gene_type=protein_coding \\
+  | awk -F"\\t" -v OFS="\\t" '\$3 == "gene" {print \$1, \$4, \$5, "${gene}", \$7}' \\
   > ${gene}.bed
 
   # get the transcript/exon coords from the gff3 file
   echo -e "chr\\tstart\\tend\\tgene\\ttype\\tattributes" > ${gene}_exons.bed
-  zcat ${gencode_gff3} \
-  | grep -w ${gene} \
-  | awk -F"\t" -v OFS="\t" '\$3 == "exon" || \$3 == "transcript" || \$3 == "start_codon" {print \$1, \$4, \$5, "${gene}", \$3, \$9}' \
+  zcat ${gencode_gff3} \\
+  | grep -w ${gene} \\
+  | awk -F"\t" -v OFS="\t" '\$3 == "exon" || \$3 == "transcript" || \$3 == "start_codon" {print \$1, \$4, \$5, "${gene}", \$3, \$9}' \\
   >> ${gene}_exons.bed
   """
 }
@@ -165,7 +166,7 @@ process get_coverage_per_cell {
   # get unique cell barcodes, trim CB:Z: prefix and -1 suffix
   samtools view $bam | cut -f12- | tr "\\t" "\\n" |
   grep "CB:Z:" | sed 's/^CB:Z://g' | awk '!x[\$0]++' \
-  > cell_barcodes.txt-1
+  > cell_barcodes.txt
 
   echo "creating a bam per cell"
   rm -rf cell_bams ; mkdir -p cell_bams
@@ -187,7 +188,7 @@ process get_coverage_per_cell {
     echo "processing gene \$gene"
 
     # initialise gene coverage file
-    mkdir \${gene}
+    rm -rf \${gene} ; mkdir \${gene}
     touch \${gene}_cov.tsv
 
     echo "calculating coverage per base per cell"
@@ -277,10 +278,8 @@ process plot_coverage {
       # move protein-coding to top of plot
       transcript_type = forcats::fct_relevel(transcript_type, "protein_coding"))
 
-  # get coverage data, remove `-1` suffix from colnames
-  cov <-
-    readr::read_tsv("${cov}")
-  colnames(cov) <- colnames(cov) %>% stringr::str_remove("-1\$")
+  # get coverage data
+  cov <- readr::read_tsv("${cov}")
 
   # get celltype annotations
   celltypes <-
