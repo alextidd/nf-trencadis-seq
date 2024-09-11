@@ -154,7 +154,7 @@ process subset_bams_to_drivers {
 // split subsetted BAMs by cell, count coverage
 process get_coverage_per_cell {
   tag "${meta.run}_${gene}"
-  label 'normal'
+  label 'week10gb'
   errorStrategy 'retry'
   publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
     mode: "copy",
