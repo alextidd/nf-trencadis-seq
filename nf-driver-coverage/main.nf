@@ -132,6 +132,9 @@ process subset_bams_to_drivers {
   tag "${meta.run}_${gene}"
   label 'normal'
   errorStrategy 'ignore'
+  publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
+    mode: "copy",
+    pattern: "*_subset.{bam,bam.bai}"
 
   input:
   tuple val(meta), path(bam), path(bai), path(celltypes), path(variant_annotations),
@@ -158,7 +161,7 @@ process get_coverage_per_cell {
   errorStrategy 'retry'
   publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
     mode: "copy",
-    pattern: "*_coverage_per_cell.tsv"
+    pattern: "{*_coverage_per_cell.tsv,cell_bams/*}"
 
   input:
   tuple val(meta), path(bam), path(bai), path(celltypes), path(variant_annotations),
@@ -167,7 +170,9 @@ process get_coverage_per_cell {
   output:
   tuple val(meta), path("${meta.run}_${gene}_coverage_per_cell.tsv"),
         path(celltypes), path(variant_annotations),
-        val(gene), path(gene_bed), path(features_bed), path(exonic_bed)
+        val(gene), path(gene_bed), path(features_bed), path(exonic_bed),
+        emit: coverage_per_cell
+  path "cell_bams/*"
 
   script:
   """
@@ -227,9 +232,6 @@ process get_coverage_per_cell {
     paste \${gene}_coords.tsv \${gene}_cov.tsv > \${gene}_cov_per_cell.tsv
 
   done < $gene_bed
-
-  echo "cleaning up cell_bams/*"
-  rm -rf cell_bams
 
   echo "combining outputs"
   ls *_cov_per_cell.tsv | head -1 | xargs head -1 \
@@ -799,7 +801,7 @@ workflow {
   ch_samples_x_drivers = ch_checked_bam.combine(get_driver_gene_coords.out)
   subset_bams_to_drivers(ch_samples_x_drivers)
   get_coverage_per_cell(subset_bams_to_drivers.out)
-  plot_coverage(get_coverage_per_cell.out)
+  plot_coverage(get_coverage_per_cell.out.coverage_per_cell)
 
   // plot 5' drop-off per gene
   ch_exonic_cov_per_gene = plot_coverage.out.exonic_coverage.groupTuple()
