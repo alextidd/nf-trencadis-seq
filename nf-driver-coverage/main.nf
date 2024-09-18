@@ -292,7 +292,7 @@ process plot_coverage {
   maxRetries 10
   publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
     mode: "copy",
-    pattern: "*{coverage_per_celltype.tsv,coverage_per_exonic_position.tsv,coverage_per_ccds_base_per_cell.tsv,.pdf,.png}"
+    pattern: "*{celltype.tsv,exonic_position.tsv,ccds_base_per_cell.tsv,.pdf,.png}"
   errorStrategy 'retry'
   beforeScript "module load ISG/rocker/rver/4.4.0; export R_LIBS_USER=~/R-tmp-4.4"
 
@@ -319,10 +319,9 @@ process plot_coverage {
   library(magrittr)
   library(ggplot2)
   library(patchwork)
-  library(biomaRt)
 
   # get gene info (incl. strand to orient 5'/3' ends)
-  gene <- 
+  g <- 
     readr::read_tsv("${gene_bed}",
                     col_names = c("chr", "start", "end", "gene", "strand"))
 
@@ -331,31 +330,26 @@ process plot_coverage {
     readr::read_tsv("${exonic_bed}",
                     col_names = c("chr", "start", "end")) %>%
     # label each region, expand to all positions
-    dplyr::distinct()
-  # number facets by gene orientation
-  if (gene\$strand == "+") {
-    exonic_regions <- dplyr::arrange(exonic_regions, start)
-  } else {
-    exonic_regions <- dplyr::arrange(exonic_regions, desc(start))
-  }
-  exonic_regions <- 
-    exonic_regions %>%
-    dplyr::mutate(exonic_region = dplyr::row_number()) %>%
-    dplyr::group_by(chr, exonic_region) %>%
-    dplyr::reframe(pos = start:end)
+    dplyr::distinct() %>%
+    dplyr::mutate(arr = dplyr::case_when(g\$strand == "+" ~ start,
+                                         g\$strand == "-" ~ -start)) %>%
+    dplyr::arrange(arr) %>%
+    dplyr::mutate(region = dplyr::row_number()) %>%
+    dplyr::group_by(chr, region) %>%
+    dplyr::reframe(pos = start:end) %>%
+    # get exonic distance from 3'
+    dplyr::group_by(pos) %>%
+    dplyr::mutate(exonic_distance_from_3_prime = dplyr::cur_group_id()) %>%
+    dplyr::ungroup()
   
   # get ccds regions
   ccds_regions <-
-    readr::read_tsv("${gene}_ccds_regions.bed")
-  if (gene\$strand == "+") {
-    ccds_regions <- dplyr::arrange(ccds_regions, start)
-  } else {
-    ccds_regions <- dplyr::arrange(ccds_regions, desc(start))
-  }
-  ccds_regions <-
-    ccds_regions %>%
-    dplyr::mutate(ccds_region = dplyr::row_number()) %>%
-    dplyr::group_by(chr, ccds_region) %>%
+    readr::read_tsv("${ccds_bed}") %>%
+    dplyr::mutate(arr = dplyr::case_when(g\$strand == "+" ~ start,
+                                         g\$strand == "-" ~ -start)) %>%
+    dplyr::arrange(arr) %>%
+    dplyr::mutate(region = dplyr::row_number()) %>%
+    dplyr::group_by(chr, region) %>%
     dplyr::reframe(pos = start:end)
 
   # get features (must wrangle from GFF3 attributes)
@@ -369,17 +363,32 @@ process plot_coverage {
     dplyr::filter(name %in% c("exon_id", "transcript_id", "transcript_type",
                               "exon_number")) %>%
     tidyr::pivot_wider() %>%
+    readr::type_convert() %>%
     dplyr::mutate(
       # move protein-coding to top of plot
-      transcript_type = forcats::fct_relevel(transcript_type, "protein_coding"))
+      transcript_type = forcats::fct_relevel(transcript_type, "protein_coding"),
+      # alternate exons for colouring
+      exon_alternating = as.character(exon_number %% 2))
+  
+  # get mutations from Mitchell 2022
+  wgs_mut_annots <-
+    readr::read_tsv("${wgs_mut_annots}") %>%
+    dplyr::filter(gene == "${gene}")
 
+  # get mutations from PB panel
+  if ("${mut_annots}" != "NO_FILE") {
+    mut_annots <-
+      readr::read_tsv("${mut_annots}", comment = "#") %>%
+      dplyr::filter(gene == g\$gene)
+  }
+
+  # get coverage data
+  cov <- readr::read_tsv("${cov}")
+  
   # get celltype annotations
   celltypes <-
     readr::read_csv("${celltypes}") %>%
     dplyr::filter(barcode_${meta.kit} %in% colnames(cov))
-
-  # get coverage data
-  cov <- readr::read_tsv("${cov}")
 
   # get the counts of each unique value in each matrix row, per celltype
   cov_per_ct <-
@@ -410,7 +419,7 @@ process plot_coverage {
     }) %>%
     dplyr::bind_rows(.id = "celltype") %>%
     dplyr::mutate(celltype = paste0(celltype, " (", total_cells, ")") %>%
-                    forcats::fct_reorder(total_cells, .desc = T))
+                    forcats::fct_reorder(total_cells, .desc = TRUE))
 
   # save
   cov_per_ct %>%
@@ -427,22 +436,11 @@ process plot_coverage {
     cov_per_ct %>%
     dplyr::inner_join(exonic_regions) %>%
     # get number of cells per coverage per position
-    dplyr::group_by(chr, pos, gene, exonic_region, coverage) %>%
+    dplyr::group_by(chr, pos, gene, region, exonic_distance_from_3_prime,
+                    coverage) %>%
     dplyr::summarise(n_cells = sum(n_cells)) %>%
     dplyr::ungroup() %>%
     dplyr::mutate(total_cells = total_cells_all_cts)
-
-  # get exonic distance from the 3' end
-  if (gene\$strand == "+") {
-    exonic_cov <- dplyr::arrange(exonic_cov, dplyr::desc(pos))
-  } else {
-    exonic_cov <- dplyr::arrange(exonic_cov, pos)
-  }
-  exonic_cov <-
-    exonic_cov %>%
-    dplyr::group_by(pos) %>%
-    dplyr::mutate(exonic_distance_from_3_prime = dplyr::cur_group_id()) %>%
-    dplyr::ungroup()
   
   # save
   exonic_cov %>%
@@ -462,15 +460,11 @@ process plot_coverage {
   p <- list()
   p_theme <- theme_minimal()
   p_subtitle <- paste0("${meta.run} ${gene} (", gene\$strand, " strand, ",
-                        prettyNum(gene\$end - gene\$start, big.mark = ",",
+                        prettyNum(g\$end - g\$start, big.mark = ",",
                                   scientific = FALSE),
                         "bp, min coverage = ${params.min_cov})")
 
   # plot wgs mutations
-  wgs_mut_annots <-
-    readr::read_tsv("${wgs_mut_annots}") %>%
-    dplyr::filter(gene == "${gene}")
-  
   if (nrow(wgs_mut_annots) > 0) {
 
       p[["wgs_mutations"]] <-
@@ -484,7 +478,7 @@ process plot_coverage {
         dplyr::right_join(exonic_regions) %>%
         ggplot(aes(x = pos, y = 1, colour = mut_type)) +
         geom_point(na.rm = TRUE) +
-        facet_grid(. ~ exonic_region, scales = "free_x", space = "free_x") +
+        facet_grid(. ~ region, scales = "free_x", space = "free_x") +
         theme_void() +
         scale_colour_discrete(na.translate = FALSE) +
         scale_x_discrete(expand = c(0, 0)) +
@@ -503,10 +497,10 @@ process plot_coverage {
     # add mutation counts as subtitle
     p[["wgs_mutations"]] <-
       p[["wgs_mutations"]] +
-      labs(subtitle = paste(nrow(mut_annots), "mutations called in WGS from Mitchell 2022"))
+      labs(subtitle = paste(nrow(wgs_mut_annots), "mutations called in WGS from Mitchell 2022"))
     exonic_vars <-
-      mut_annots %>%
-      dplyr::filter(Start_Position %in% exonic_regions\$pos)
+      wgs_mut_annots %>%
+      dplyr::filter(pos %in% exonic_regions\$pos)
     p[["wgs_mutations_exonic"]] <-
       p[["wgs_mutations_exonic"]] +
       labs(subtitle = paste(nrow(exonic_vars), "exonic mutations called in WGS from Mitchell 2022"))
@@ -515,7 +509,7 @@ process plot_coverage {
   if ("${mut_annots}" != "NO_FILE") {
     mut_annots <-
       readr::read_tsv("${mut_annots}", comment = "#") %>%
-      dplyr::filter(Hugo_Symbol == gene\$gene)
+      dplyr::filter(Hugo_Symbol == g\$gene)
     
     if (nrow(mut_annots) > 0) {
 
@@ -532,7 +526,7 @@ process plot_coverage {
         #dplyr::arrange(is.na(Variant_Type)) %>%
         ggplot(aes(x = pos, y = 1, colour = Variant_Type)) +
         geom_point(na.rm = TRUE) +
-        facet_grid(. ~ exonic_region, scales = "free_x", space = "free_x") +
+        facet_grid(. ~ region, scales = "free_x", space = "free_x") +
         theme_void() +
         scale_colour_discrete(na.translate = FALSE) +
         scale_x_discrete(expand = c(0, 0)) +
@@ -613,7 +607,7 @@ process plot_coverage {
                 size = 3, colour = "lightskyblue1") +
     geom_point(data = . %>% dplyr::filter(type == "start_codon"),
                 shape = 83, size = 2, colour = "blue4") +
-    facet_grid(transcript_type ~ exonic_region, space = "free", scales = "free") +
+    facet_grid(transcript_type ~ region, space = "free", scales = "free") +
     p_theme +
     theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off",
           strip.text.x = element_blank(),
@@ -653,7 +647,7 @@ process plot_coverage {
                 size = 3, colour = "lightskyblue1") +
     geom_point(data = . %>% dplyr::filter(type == "start_codon"),
                 shape = 83, size = 2, colour = "blue4") +
-    facet_grid(transcript_type ~ ccds_region, space = "free", scales = "free") +
+    facet_grid(transcript_type ~ region, space = "free", scales = "free") +
     p_theme +
     theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off",
           strip.text.x = element_blank(),
@@ -723,7 +717,7 @@ process plot_coverage {
               aes(fill = coverage), position = "stack", width = 1) +
     viridis::scale_fill_viridis(na.value = "grey") +
     scale_x_discrete(expand = c(0, 0)) +
-    facet_grid(celltype ~ exonic_region, scales = "free", space = "free_x") +
+    facet_grid(celltype ~ region, scales = "free", space = "free_x") +
     p_theme +
     theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off",
           strip.text.x = element_blank(),
@@ -761,7 +755,7 @@ process plot_coverage {
               aes(fill = coverage), position = "stack", width = 1) +
     viridis::scale_fill_viridis(na.value = "grey") +
     scale_x_discrete(expand = c(0, 0)) +
-    facet_grid(celltype ~ ccds_region, scales = "free", space = "free_x") +
+    facet_grid(celltype ~ region, scales = "free", space = "free_x") +
     p_theme +
     theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off",
           strip.text.x = element_blank(),
@@ -798,7 +792,7 @@ process plot_coverage {
   p[["ge_exonic"]] <-
     cov_per_ct %>%
     dplyr::inner_join(exonic_regions) %>%
-    dplyr::group_by(exonic_region, pos) %>%
+    dplyr::group_by(region, pos) %>%
     dplyr::summarise(`% of cells\\nw/ cov` = 100 *
                         sum(n_cells[coverage >= ${params.min_cov}]) / sum(n_cells)) %>%
     ggplot(aes(x = pos, y = 1, fill = `% of cells\\nw/ cov`,
@@ -807,7 +801,7 @@ process plot_coverage {
     viridis::scale_fill_viridis() +
     viridis::scale_colour_viridis() +
     scale_x_discrete(expand = c(0, 0)) +
-    facet_grid(. ~ exonic_region, scales = "free", space = "free_x") +
+    facet_grid(. ~ region, scales = "free", space = "free_x") +
     p_theme +
     theme(strip.text.x = element_blank(),
           axis.text.y = element_blank(),
@@ -857,7 +851,7 @@ process plot_coverage {
           x = "position", y = "coverage")
 
   # if strand is "-", flip the x axis
-  if (gene\$strand == "-") {
+  if (g\$strand == "-") {
     p <- lapply(p, function(x) x + scale_x_reverse(expand = c(0, 0)))
   }
 
@@ -871,7 +865,11 @@ process plot_coverage {
   ggsave("${meta.run}_${gene}_coverage_exonic_plot.${params.plot_device}",
         p[["wgs_mutations_exonic"]] / p[["mutations_exonic"]] /
         p[["cov_exonic"]] / p[["ge_exonic"]] / p[["transcripts_exonic"]] +
-          plot_layout(heights = c(1, 4, 0.5, 2)),
+          plot_layout(heights = c(0.5, 0.5, 4, 0.5, 2)),
+        dpi = 500)
+  
+  ggsave("${meta.run}_${gene}_coverage_ccds_plot.${params.plot_device}",
+        p[["cov_ccds"]] / p[["transcripts_ccds"]] + plot_layout(heights = c(4, 1)),
         dpi = 500)
 
   ggsave("${meta.run}_${gene}_genotyping_efficiency_plot.${params.plot_device}",
