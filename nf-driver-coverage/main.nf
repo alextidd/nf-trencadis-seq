@@ -156,7 +156,7 @@ process get_driver_gene_coords {
 
   script:
   """
-  # get the proteinc-coding gene coords from the gff3 file (chr start end gene strand)
+  # get the protein-coding gene coords from the gff3 file (chr start end gene strand)
   zcat ${gencode_gff3} \\
   | grep -w ${gene} \\
   | grep -w gene_type=protein_coding \\
@@ -167,7 +167,7 @@ process get_driver_gene_coords {
   echo -e "chr\\tstart\\tend\\tgene\\ttype\\tattributes" > ${gene}_features.bed
   zcat ${gencode_gff3} \\
   | grep -w ${gene} \\
-  | awk -F"\t" -v OFS="\t" '\$3 == "exon" || \$3 == "transcript" || \$3 == "start_codon" {print \$1, \$4, \$5, "${gene}", \$3, \$9}' \\
+  | awk -F"\t" -v OFS="\t" '\$3 == "exon" || \$3 == "transcript" {print \$1, \$4, \$5, "${gene}", \$3, \$9}' \\
   >> ${gene}_features.bed
 
   # get all exonic regions, collapsing overlaps
@@ -325,7 +325,10 @@ process wrangle_data {
   label 'normal20gb'
   maxRetries 10
   beforeScript "module load ISG/rocker/rver/4.4.0; export R_LIBS_USER=~/R-tmp-4.4"
-
+  publishDir "${params.out_dir}/genes/${gene}/",
+    mode: "copy",
+    pattern: "*_avg_coverage_per_ccds_base_per_cell.tsv"
+  
   input:
   tuple val(meta), path(cov),
         path(celltypes),
@@ -335,10 +338,12 @@ process wrangle_data {
         path(exonic_bed)
   
   output:
-  tuple val(meta), val(gene), path("*.rds"), emit: plot_data
+  tuple val(meta), val(gene), path("*.rds"),
+        emit: plot_data
   tuple val(gene),
         path("${meta.run}_${gene}_coverage_per_exonic_position.tsv"),
         emit: exonic_coverage
+  path("${meta.run}_${gene}_avg_coverage_per_ccds_base_per_cell.tsv")
 
   script:
   """
@@ -409,7 +414,7 @@ process wrangle_data {
       mut_annots %>%
       dplyr::right_join(
         tibble::tibble(chr = unique(features\$chr),
-                      pos = min(features\$start):max(features\$end))) %>%
+                       pos = min(features\$start):max(features\$end))) %>%
         dplyr::mutate(
           var_label = dplyr::case_when(alt_depth == 0 ~ NA,
                                       !is.na(HGVSp) ~ HGVSp,
@@ -500,6 +505,7 @@ process wrangle_data {
       "${meta.run}_${gene}_avg_coverage_per_ccds_base_per_cell.tsv")
 
   # save
+  g %>% saveRDS("${meta.run}_${gene}.rds")
   regions %>% saveRDS("${meta.run}_${gene}_regions.rds")
   features %>% saveRDS("${meta.run}_${gene}_features.rds")
   mut_annots %>% saveRDS("${meta.run}_${gene}_mut_annots.rds")
@@ -514,21 +520,14 @@ process plot_coverage {
   tag "${meta.run}_${gene}"
   label 'normal10gb'
   maxRetries 10
-  publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
-    mode: "copy",
-    pattern: "*{celltype.tsv,exonic_position.tsv,base_per_cell.tsv,.pdf,.png}"
+  publishDir "${params.out_dir}/runs/${meta.run}/${gene}/", mode: "copy"
   beforeScript "module load ISG/rocker/rver/4.4.0; export R_LIBS_USER=~/R-tmp-4.4"
 
   input:
   tuple val(meta), val(gene), path(rdss)
   
   output:
-  tuple val(gene),
-        path("${meta.run}_${gene}_coverage_per_exonic_position.tsv"),
-        emit: exonic_coverage
-  path("${meta.run}_${gene}_coverage_per_celltype.tsv")
   path("${meta.run}_${gene}_*_plot.${params.plot_device}")
-  path("${meta.run}_${gene}_avg_coverage_per_ccds_base_per_cell.tsv")
 
   script:
   """
@@ -540,6 +539,7 @@ process plot_coverage {
   library(patchwork)
   
   # read plot data
+  g <- readRDS("${meta.run}_${gene}.rds")
   regions <- readRDS("${meta.run}_${gene}_regions.rds")
   features <- readRDS("${meta.run}_${gene}_features.rds")
   mut_annots <- readRDS("${meta.run}_${gene}_mut_annots.rds")
@@ -573,22 +573,31 @@ process plot_coverage {
         scale_colour_discrete(na.translate = FALSE, na.value = NA) +
         scale_x_discrete(expand = c(0, 0)) +
         scale_y_discrete(expand = c(0, 0)) +
-        labs(subtitle = paste(n_muts, muts_subtitle)) +
-        ggrepel::geom_text_repel(aes(label = mut),
-                                 force_pull = 0, nudge_y = 0.1, direction = "x",
-                                 angle = 90, hjust = 0, size = 1.5) +
-        ylim(0, 0.05)
+        labs(subtitle = paste(n_muts, muts_subtitle))
       if (facet_by_region) {
         p <-
           p +
           facet_grid(. ~ region, scales = "free_x", space = "free_x") +
-          scale_x_discrete(expand = c(0, 0)) +
           p_facet_theme
     }
     p
   }
 
-  plot_mutations <- function(p_dat, facet_by_region = FALSE,
+  plot_mutations <-
+    function(p_dat, facet_by_region = FALSE,
+             muts_subtitle = "SNVs called in WGS from Mitchell 2022") {
+      p <-
+        p_dat %>%
+        dplyr::mutate(
+          mut_type = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
+                                      TRUE ~ mut_type),
+          variant_id = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
+                                        TRUE ~ variant_id)) %>%
+        plot_wgs_mutations(facet_by_region = facet_by_region,
+                           muts_subtitle = muts_subtitle)
+  }
+
+  plot_pie_mutations <- function(p_dat, facet_by_region = FALSE,
                                     muts_subtitle = "mutations called") {
     # get number of unique mutations called
     n_muts <-
@@ -596,30 +605,35 @@ process plot_coverage {
       dplyr::filter(alt_depth > 0) %>%
       dplyr::pull(variant_id) %>%
       dplyr::n_distinct()
-    p <-
-      p_dat %>%
-      dplyr::transmute(
-        celltype, pos, label, y = 0, ref_depth, alt_depth,
-        ratio = ifelse(alt_depth > 0, paste0(alt_depth, "/", depth), NA)) %>%
-      ggplot() +
-      scatterpie::geom_scatterpie(
-        aes(x = pos, y = y), cols = c("ref_depth", "alt_depth"),
-        legend_name = "depth", na.rm = TRUE, colour = NA) +
-      geom_text(aes(x = pos, y = y, label = ratio)) +
-      coord_equal() +
-      facet_grid(celltype ~ ., drop = TRUE) +
-      p_facet_theme +
-      theme_minimal() +
-      theme_void() +
-      theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off")
-    if (facet_by_region) {
+    
+    if (n_muts > 0) {
       p <-
-        p +
-        facet_grid(celltype ~ region, scales = "free", space = "free_x") +
-        scale_x_discrete(expand = c(0, 0)) +
-        p_facet_theme
+        p_dat %>%
+        dplyr::mutate(
+          celltype, pos, label, y = 0, ref_depth, alt_depth,
+          ratio = ifelse(alt_depth > 0, paste0(alt_depth, "/", depth), NA)) %>%
+        dplyr::select(-depth) %>%
+        ggplot() +
+        scatterpie::geom_scatterpie(
+          aes(x = pos, y = y), cols = c("ref_depth", "alt_depth"),
+          legend_name = "depth", na.rm = TRUE, colour = NA) +
+        geom_text(aes(x = pos, y = y, label = ratio)) +
+        facet_grid(celltype ~ ., drop = TRUE) +
+        p_facet_theme +
+        theme_void() +
+        theme(strip.text.y.right = element_text(angle = 0), strip.clip = "off")
+      
+      if (facet_by_region) {
+        p <-
+          p +
+          facet_grid(celltype ~ region, scales = "free", space = "free_x") +
+          scale_x_discrete(expand = c(0, 0)) +
+          p_facet_theme
+      }
+    } else {
+      p <- ggplot() + theme_void()
     }
-    p
+    p + labs(subtitle = paste(n_muts, muts_subtitle))
   }
 
   plot_transcripts <- function(p_dat, facet_by_region = FALSE) {
@@ -688,7 +702,8 @@ process plot_coverage {
             axis.text.x = element_blank(),
             axis.text.y = element_text(size = 5),
             axis.title.x = element_blank(),
-            panel.grid = element_blank()) +
+            panel.grid = element_blank(),
+            legend.direction = "horizontal") +
       labs(title = p_title, subtitle = p_subtitle, y = y_var) +
       guides(colour = "none")
     if (facet_by_region) {
@@ -729,9 +744,6 @@ process plot_coverage {
     }
     p
   }
-
-  # plot mutations at mutant sites only
-
 
   # initialise list of lists plots
   p <- list()
@@ -790,8 +802,11 @@ process plot_coverage {
   p[["genic"]][["transcripts"]] <- plot_transcripts(features)
   p[["exonic"]][["transcripts"]] <-
     features %>%
-    dplyr::filter(type == "exon") %>%
-    dplyr::mutate(region = exon_number) %>%
+    dplyr::group_by(dplyr::across(-c(start, end))) %>%
+    dplyr::reframe(pos = start:end) %>%
+    dplyr::right_join(regions[["exonic"]] %>% dplyr::select(chr, region, pos)) %>%
+    dplyr::group_by(dplyr::across(-c(pos))) %>%
+    dplyr::summarise(start = min(pos), end = max(pos)) %>%
     plot_transcripts(facet_by_region = TRUE)
   p[["ccds"]][["transcripts"]] <-
     features %>%
@@ -856,7 +871,7 @@ process plot_coverage {
       paste0("${meta.run}_${gene}_", lvl, "_cov_plot.${params.plot_device}"),
       p1[["wgs_mutations"]] /
       p1[["mutations"]] /
-      p1[["cov"]] / 
+      p1[["cov"]] /
       p1[["ge"]] /
       p1[["transcripts"]] +
         plot_layout(heights = c(p_wgs_muts_height, p_muts_height, 4, 0.5, 2)),
@@ -865,7 +880,7 @@ process plot_coverage {
       paste0("${meta.run}_${gene}_", lvl, "_cov_pct_plot.${params.plot_device}"),
       p1[["wgs_mutations"]] /
       p1[["mutations"]] /
-      p1[["cov_pct"]] / 
+      p1[["cov_pct"]] /
       p1[["ge"]] /
       p1[["transcripts"]] +
         plot_layout(heights = c(p_wgs_muts_height, p_muts_height, 4, 0.5, 2)),
