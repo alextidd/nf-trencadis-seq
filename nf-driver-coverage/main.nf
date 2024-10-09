@@ -419,7 +419,7 @@ process wrangle_data {
           var_label = dplyr::case_when(alt_depth == 0 ~ NA,
                                       !is.na(HGVSp) ~ HGVSp,
                                       !is.na(HGVSc) ~ HGVSc,
-                                      TRUE ~ variant_id),
+                                      TRUE ~ mut_ref),
           label = dplyr::case_when(
             !is.na(var_label) ~ sprintf("%s (%s/%s)", var_label, alt_depth, depth),
             TRUE ~ NA))
@@ -528,6 +528,7 @@ process plot_coverage {
   
   output:
   path("${meta.run}_${gene}_*_plot.${params.plot_device}")
+  path("${meta.run}_${gene}_pie_mutations_plot.rds")
 
   script:
   """
@@ -559,8 +560,8 @@ process plot_coverage {
             muts_subtitle = "SNVs called in WGS from Mitchell 2022") {
       n_muts <-
         p_dat %>%
-        dplyr::filter(!is.na(variant_id)) %>%
-        dplyr::pull(variant_id) %>%
+        dplyr::filter(!is.na(mut_ref)) %>%
+        dplyr::pull(mut_ref) %>%
         dplyr::n_distinct()
       p <-
         p_dat %>%
@@ -591,8 +592,8 @@ process plot_coverage {
         dplyr::mutate(
           mut_type = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
                                       TRUE ~ mut_type),
-          variant_id = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
-                                        TRUE ~ variant_id)) %>%
+          mut_ref = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
+                                     TRUE ~ mut_ref)) %>%
         plot_wgs_mutations(facet_by_region = facet_by_region,
                            muts_subtitle = muts_subtitle)
   }
@@ -706,7 +707,7 @@ process plot_coverage {
     p
   }
 
-  plot_mut_pie <- function(cov_per_ct, mut_annots) {
+  plot_mut_pie <- function(cov_per_ct, mut_annots, g, p_title) {
 
     # sort ct order
     ct_order <-
@@ -719,22 +720,23 @@ process plot_coverage {
     # get mut sites only
     mut_sites <-
       mut_annots %>%
-      dplyr::filter(!is.na(variant_id))
+      dplyr::filter(!is.na(mut_ref))
     mut_sites <-
       mut_sites %>%
-      dplyr::group_by(variant_id, chr, pos, gene) %>%
+      dplyr::group_by(mut_ref, chr, pos, gene) %>%
       dplyr::summarise(ref_depth = sum(ref_depth),
                       alt_depth = sum(alt_depth),
                       depth = sum(depth),
                       celltype = "all") %>%
       dplyr::bind_rows(mut_sites) %>%
       dplyr::mutate(
-        region = variant_id,
+        region = mut_ref,
         radius = 0.45,
         celltype = factor(celltype, levels = ct_order),
         celltype_n = as.integer(celltype),
-        variant_id = forcats::fct_reorder(variant_id, pos),
-        variant_id_n = as.integer(variant_id),
+        arr = ifelse(g\$strand == "+", pos, -pos),
+        mut_ref = forcats::fct_reorder(mut_ref, arr),
+        mut_ref_n = as.integer(mut_ref),
         label = paste0(ifelse(depth == 0, "-", round(100 * alt_depth / depth, 1)),
                       "%\\n", alt_depth, "/", depth),
         `variant detected?` = ifelse(alt_depth > 0, "yes", NA)) %>%
@@ -743,60 +745,47 @@ process plot_coverage {
     # plot mut pie
     p_mut_pie <-
       mut_sites %>%
-      ggplot(aes(x = variant_id_n, y = celltype_n)) +
+      ggplot(aes(x = mut_ref_n, y = celltype_n)) +
       geom_tile(aes(colour = `variant detected?`), fill = NA, linewidth = 1) +
       scatterpie::geom_scatterpie(
-        aes(x = variant_id_n, y = celltype_n, r = radius),
+        aes(x = mut_ref_n, y = celltype_n, r = radius),
         cols = c("ref_depth", "alt_depth"),
         legend_name = "depth", na.rm = TRUE, colour = NA) +
       geom_text(aes(label = label)) +
       coord_equal() +
-      scale_x_continuous(breaks = unique(p_dat\$variant_id_n),
-                        labels = unique(p_dat\$variant_id),
+      scale_x_continuous(breaks = unique(mut_sites\$mut_ref_n),
+                        labels = unique(mut_sites\$mut_ref),
                         guide = guide_axis(angle = -45),
                         expand = c(0, 0)) +
-      scale_y_continuous(breaks = unique(p_dat\$celltype_n),
-                        labels = unique(p_dat\$celltype),
+      scale_y_continuous(breaks = unique(mut_sites\$celltype_n),
+                        labels = unique(mut_sites\$celltype),
                         expand = c(0, 0)) +
       theme_minimal() +
       scale_fill_manual(values = c("ref_depth" = "#c0d7fa",
-                                  "alt_depth" = "#002c6e")) +
-      scale_colour_manual(values = c("yes" = "black"), na.translate = FALSE, na.value = NA) +
-      labs(x = "variant") +
+                                  "alt_depth" = "#eabac7")) +
+      scale_colour_manual(values = c("yes" = "red"), na.translate = FALSE, na.value = NA) +
+      labs(x = "variant", title = p_title,
+           subtitle = "Proportion of alt reads / all reads at the site") +
       theme(panel.grid = element_blank(),
             axis.title.y = element_blank(),
             axis.ticks = element_line())
-
-    # plot cov
-    p_mut_cov <-
-      cov_per_ct %>%
-      dplyr::mutate(
-        celltype = factor(celltype, levels = ct_order),
-        celltype_label = forcats::fct_reorder(celltype_label,
-                                              -as.integer(celltype))) %>%
-      dplyr::inner_join(mut_sites) %>%
-      plot_cov(facet_by_region = TRUE) +
-      theme(legend.direction = "vertical")
 
     # plot ge, by celltype
     p_mut_ge <-
       cov_per_ct %>%
       dplyr::mutate(celltype = factor(celltype, levels = ct_order)) %>%
       dplyr::inner_join(mut_sites) %>%
-      dplyr::group_by(variant_id, celltype, `variant detected?`) %>%
+      dplyr::group_by(mut_ref, celltype, `variant detected?`) %>%
       dplyr::summarise(n_cells_w_cov = sum(n_cells[coverage >= 1]),
                       n_cells_total = sum(n_cells),
                       `% of cells\\nw/ reads` = 100 * n_cells_w_cov / n_cells_total) %>%
-      ggplot(aes(x = variant_id, y = celltype, fill = `% of cells\\nw/ reads`,
-                colour = `variant detected?`)) +
-      geom_tile(width = 1) +
-      geom_tile(fill = NA, linewidth = 1) +
+      ggplot(aes(x = mut_ref, y = celltype)) +
+      geom_tile(aes(fill = `% of cells\\nw/ reads`), width = 1) +
+      geom_tile(aes(colour = `variant detected?`), fill = NA, linewidth = 1) +
       geom_label(aes(label = paste0(round(`% of cells\\nw/ reads`, 1), "%\\n",
-                                    n_cells_w_cov, "/", n_cells_total)),
-                fill = "white", colour = "black") +
+                                    n_cells_w_cov, "/", n_cells_total))) +
       viridis::scale_fill_viridis() +
-      scale_colour_manual(values = c("yes" = "white"), na.translate = FALSE, na.value = NA) +
-      #viridis::scale_colour_viridis() +
+      scale_colour_manual(values = c("yes" = "red"), na.translate = FALSE, na.value = NA) +
       theme_minimal() +
       theme(axis.title.x = element_blank(),
             axis.title.y = element_blank(),
@@ -804,10 +793,26 @@ process plot_coverage {
             panel.grid.minor.y = element_blank()) +
       scale_x_discrete(expand = c(0, 0), guide = guide_axis(angle = -45)) +
       scale_y_discrete(expand = c(0, 0)) +
-      coord_equal()
+      coord_equal() +
+      labs(subtitle = "Proportion of cells with at least 1 read at the site")
+
+    # plot distance from polyA
+    p_dist_polyA <-
+      mut_sites %>%
+      dplyr::mutate(pos_polyA = ifelse(g\$strand == "+", g\$end, g\$start),
+                    dist_polyA = abs(pos - pos_polyA),
+                    lab_polyA = prettyNum(dist_polyA, big.mark = ",",
+                                          scientific = FALSE)) %>%
+      dplyr::distinct(mut_ref, dist_polyA, lab_polyA) %>%
+      ggplot(aes(x = mut_ref, y = dist_polyA)) +
+      geom_col() +
+      geom_text(aes(label = lab_polyA), vjust = 1.5) +
+      theme_void() +
+      labs(subtitle = "Genomic distance from polyA site") +
+      scale_y_reverse()
 
     # patchwork
-    p_mut_cov / p_mut_ge / p_mut_pie
+    p_mut_pie / p_mut_ge / p_dist_polyA
   }
 
   # initialise list of lists plots
@@ -844,6 +849,8 @@ process plot_coverage {
   
   # plot mutations from PB panel
   if ("${meta.kit}" == "PB" & "${meta.seq_type}" == "panel" & nrow(mut_annots) > 0) {
+
+    # plot mutations
     p[["genic"]][["mutations"]] <-
       plot_mutations(mut_annots,
                      muts_subtitle = "mutations called")
@@ -856,12 +863,19 @@ process plot_coverage {
                      facet_by_region = TRUE,
                      muts_subtitle = "cCDS mutations called")
     p_muts_height <- 0.5
-    p_pie <- plot_pie_mutations(mut_annots)
+
+    # plot mut pie, save
+    p_mut_pie <- plot_mut_pie(cov_per_ct, mut_annots, g, p_subtitle)
+    saveRDS(p_mut_pie, "${meta.run}_${gene}_pie_mutations_plot.rds")
+    ggsave(
+      "${meta.run}_${gene}_pie_mutations_plot.${params.plot_device}",
+      p_mut_pie,
+      dpi = 500, width = 18, height = 18)
+
   } else {
     p[["genic"]][["mutations"]] <- ggplot() + theme_void()
     p[["exonic"]][["mutations"]] <- ggplot() + theme_void()
     p[["ccds"]][["mutations"]] <- ggplot() + theme_void()
-    p_pie <- ggplot() + theme_void()
     p_muts_height <- 0.01
   }
   
@@ -922,11 +936,6 @@ process plot_coverage {
     dplyr::group_by(region, pos) %>%
     plot_ge(facet_by_region = TRUE)
 
-  # plot mut pie
-  if (nrow(mut_annots) > 0) {
-    p_mut_pie <- plot_mut_pie(cov_per_ct, mut_annots)
-  }
-
   # if strand is "-", flip the x axis in all plots
   if (g\$strand == "-") {
     p <-
@@ -935,17 +944,6 @@ process plot_coverage {
           p2 + scale_x_reverse(expand = c(0, 0))
         })
       })
-    if (nrow(mut_annots) > 0) {
-      p_mut_pie <- p_mut_pie + scale_x_reverse(expand = c(0, 0))
-    }
-  }
-
-  # save pie of mutations
-  if (nrow(mut_annots) > 0) {
-    ggsave(
-      paste0("${meta.run}_${gene}_pie_mutations.${params.plot_device}"),
-      p_mut_pie,
-      dpi = 500, width = 10, height = 20)
   }
 
   # save plots
