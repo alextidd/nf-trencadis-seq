@@ -31,12 +31,12 @@ process irods {
   label 'normal4core'
 
   input:
-  tuple val(meta), val(bam), path(celltypes),
-        path(mut_annots)
+  tuple val(meta), val(bam),
+        path(celltypes), path(mut_annots), path(cell_barcodes)
   
   output:
   tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai"),
-        path(celltypes), path(mut_annots)
+        path(celltypes), path(mut_annots), path(cell_barcodes)
   
   script:
   """
@@ -60,15 +60,11 @@ process local {
 
   input:
   tuple val(meta), val(bam),
-        path(celltypes),
-        path(mut_annots),
-        path(cell_barcodes)
+        path(celltypes), path(mut_annots), path(cell_barcodes)
 
   output:
   tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai"),
-        path(celltypes),
-        path(mut_annots),
-        path(cell_barcodes)
+        path(celltypes), path(mut_annots), path(cell_barcodes)
 
   script:
   """
@@ -142,6 +138,9 @@ process get_driver_gene_ccds {
 process get_driver_gene_coords {
   tag "${gene}"
   label 'normal'
+  publishDir "${params.out_dir}/genes/${gene}/",
+    mode: "copy",
+    pattern: "*.bed"
 
   input:
   tuple val(gene), path(ccds_bed)
@@ -152,7 +151,8 @@ process get_driver_gene_coords {
         path(ccds_bed),
         path("${gene}.bed"),
         path("${gene}_features.bed"),
-        path("${gene}_exonic_regions.bed")
+        path("${gene}_exonic_regions.bed"), emit: gene_features
+  path "${gene}.bed", emit: gene_bed
 
   script:
   """
@@ -181,7 +181,7 @@ process get_driver_gene_coords {
 }
 
 // subset the BAMs to only the driver regions + only barcodes in the seurat dir
-process subset_bams_to_drivers {
+process subset_bams_to_drivers_and_barcodes {
   tag "${meta.run}_${gene}"
   label 'normal'
   publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
@@ -228,7 +228,6 @@ process subset_bams_to_drivers {
 process get_coverage_per_cell {
   tag "${meta.run}_${gene}"
   label 'week10gb'
-  errorStrategy 'retry'
   publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
     mode: "copy",
     pattern: "*_coverage_per_cell.tsv"
@@ -251,7 +250,7 @@ process get_coverage_per_cell {
 
   script:
   """
-  module load samtools-1.19/python-3.12.0 
+  module load samtools-1.19/python-3.12.0
 
   echo "getting cell barcodes"
   # get unique cell barcodes in the BAM, trim CB:Z: prefix
@@ -1080,10 +1079,16 @@ workflow {
   get_driver_gene_ccds(ch_driver, refcds)
   get_driver_gene_coords(get_driver_gene_ccds.out, gencode_gff3)
 
+  // output bed of all gene coords
+  bed_hdr = Channel.of("chr\tstart\tend\tgene\tstrand\n")
+  bed_hdr.concat(get_driver_gene_coords.out.gene_bed)
+  | collectFile(name: params.out_dir + '/genes/genes.bed')
+
   // plot coverage per base per gene per cell
-  ch_samples_x_drivers = ch_checked_bam.combine(get_driver_gene_coords.out)
-  subset_bams_to_drivers(ch_samples_x_drivers)
-  get_coverage_per_cell(subset_bams_to_drivers.out)
+  ch_samples_x_drivers = \
+    ch_checked_bam.combine(get_driver_gene_coords.out.gene_features)
+  subset_bams_to_drivers_and_barcodes(ch_samples_x_drivers)
+  get_coverage_per_cell(subset_bams_to_drivers_and_barcodes.out)
   wrangle_data(get_coverage_per_cell.out)
   plot_coverage(wrangle_data.out.plot_data)
 
