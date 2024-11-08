@@ -1,13 +1,12 @@
 #!/usr/bin/env nextflow
+// TODO: add genotyping step to pipeline
+// TODO: simplify mut_annots + fix handling in plot_mut_pie()
+// TODO: ignore noncoding mutations!
+// TODO: fold Rmd reports into the nextflow pipelin
 // TODO: fix called mutation annotations to fit + facet by celltype
-// TODO: concat PB WT and panels together to get all reads together and recall mutations
-// TODO: get Rashesh to try venn diagram of barcode propagation as a sanity check
-// TODO: extract barcodes from the BAMs directly + recreate revcomp conversion to check where it fails
 // TODO: add gene expression distribution alongside mutations / coverage plots
 // TODO: create summary plot per gene
-// TODO: do PB panel / WT UMIs versus TX WT UMIs per gene - highlight drivers in red
 // TODO: add celltype marker genes to the expression dotplot (ask Laura)
-// TODO: run collectHSMetrics on PB panel data to characterise bait capture efficiency
 // TODO: check over the transcript IDs that Carol from pipeline sent - begin deconvolution in the dataset
 // using DSL-2
 nextflow.enable.dsl=2
@@ -346,6 +345,7 @@ process wrangle_data {
 
   script:
   """
+  # TODO: fix mut_annots
   wrangle_data.R \\
     --gene ${gene} \\
     --gene_bed ${gene_bed} \\
