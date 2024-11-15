@@ -2,12 +2,13 @@
 // TODO: add genotyping step to pipeline
 // TODO: simplify mut_annots + fix handling in plot_mut_pie()
 // TODO: ignore noncoding mutations!
-// TODO: fold Rmd reports into the nextflow pipelin
+// TODO: fold Rmd reports into the nextflow pipeline
 // TODO: fix called mutation annotations to fit + facet by celltype
 // TODO: add gene expression distribution alongside mutations / coverage plots
 // TODO: create summary plot per gene
 // TODO: add celltype marker genes to the expression dotplot (ask Laura)
 // TODO: check over the transcript IDs that Carol from pipeline sent - begin deconvolution in the dataset
+
 // using DSL-2
 nextflow.enable.dsl=2
 
@@ -15,11 +16,6 @@ nextflow.enable.dsl=2
 
 // import functions / modules / subworkflows / workflows
 include { validateParameters; paramsHelp; paramsSummaryLog; samplesheetToList } from 'plugin/nf-schema'
-
-// validate input parameters
-if (params.validate_params) {
-  validateParameters()
-}
 
 // Download a given sample's BAM from iRODS
 // Then either retrieve the BAI or make one via indexing
@@ -55,7 +51,6 @@ process local {
   tag "${meta.run}"
   maxForks 10
   label 'normal4core'
-  errorStrategy = {task.attempt <= 1 ? 'retry' : 'ignore'}
 
   input:
   tuple val(meta), val(bam),
@@ -176,6 +171,24 @@ process get_driver_gene_coords {
   | sort -k1,1 -k2,2n \\
   | bedtools merge -i - \\
   > ${gene}_exonic_regions.bed
+  """
+}
+
+// collate driver gene coords
+process collate_driver_gene_coords {
+  label 'normal'
+  publishDir "${params.out_dir}/genes/", mode: "copy"
+
+  input:
+  path(genes)
+
+  output:
+  path("genes.bed")
+
+  script:
+  """
+  echo -e "chr\tstart\tend\tgene\tstrand" > genes.bed
+  cat ${genes} >> genes.bed
   """
 }
 
@@ -418,12 +431,17 @@ process plot_5_prime_dropoff {
 // main workflow
 workflow {
   
+  // validate input parameters
+  if (params.validate_params) {
+    validateParameters()
+  }
+
   // get metadata + bam paths  
   Channel.fromPath(params.samplesheet, checkIfExists: true)
   | splitCsv(header: true)
   | map { row ->
-      run = row.kit + "_" + row.seq_type + "_" + row.id
-      meta = [id:row.id, seq_type:row.seq_type, kit:row.kit, run:run]
+      def run = row.kit + "_" + row.seq_type + "_" + row.id
+      def meta = [id:row.id, seq_type:row.seq_type, kit:row.kit, run:run]
       [meta,
        file(row.bam, checkIfExists: true),
        file(row.celltypes, checkIfExists: true),
@@ -457,9 +475,8 @@ workflow {
   get_driver_gene_coords(get_driver_gene_ccds.out, gencode_gff3)
 
   // output bed of all gene coords
-  bed_hdr = Channel.of("chr\tstart\tend\tgene\tstrand\n")
-  bed_hdr.concat(get_driver_gene_coords.out.gene_bed)
-  | collectFile(name: params.out_dir + '/genes/genes.bed')
+  get_driver_gene_coords.out.gene_bed.collect()
+  | collate_driver_gene_coords
 
   // plot coverage per base per gene per cell
   ch_samples_x_drivers = \
