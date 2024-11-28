@@ -9,13 +9,11 @@ option_list <- list(
   make_option("--gene", type = "character"),
   make_option("--gene_bed", type = "character"),
   make_option("--exonic_bed", type = "character"),
-  make_option("--ccds_bed", type = "character"),
-  make_option("--features_bed", type = "character"),
-  make_option("--mut_annots", type = "character"),
+  make_option("--refcds", type = "character"),
+  make_option("--gene_features", type = "character"),
   make_option("--cov", type = "character"),
   make_option("--cell_barcodes", type = "character"),
   make_option("--celltypes", type = "character"),
-  make_option("--meta_kit", type = "character"),
   make_option("--meta_run", type = "character"))
 opts <- parse_args(OptionParser(option_list = option_list))
 saveRDS(opts, "opts.rds")
@@ -25,9 +23,8 @@ saveRDS(opts, "opts.rds")
 print(opts)
 
 # get gene info (incl. strand to orient 5'/3' ends)
-g <-
-  readr::read_tsv(opts$gene_bed,
-                  col_names = c("chr", "start", "end", "gene", "strand"))
+g <- readr::read_tsv(opts$gene_bed,
+                     col_names = c("chr", "start", "end", "gene", "strand"))
 
 # create list of regions
 regions <- list()
@@ -50,8 +47,13 @@ regions[["exonic"]] <-
   dplyr::ungroup()
 
 # get ccds regions
+load(opts$refcds)
+ref_gene <-
+  RefCDS[[which(purrr::map_lgl(RefCDS, ~ .x$gene_name == opts$gene))]]
 regions[["ccds"]] <-
-  readr::read_tsv(opts$ccds_bed) %>%
+  tibble::tibble(chr = paste0("chr", ref_gene$chr),
+                 start = ref_gene$intervals_cds[, 1],
+                 end = ref_gene$intervals_cds[, 2])  %>%
   dplyr::mutate(arr = dplyr::case_when(g$strand == "+" ~ start,
                                         g$strand == "-" ~ -start)) %>%
   dplyr::arrange(arr) %>%
@@ -61,7 +63,7 @@ regions[["ccds"]] <-
 
 # get features (must wrangle from GFF3 attributes)
 features <-
-  readr::read_tsv(opts$features_bed) %>%
+  readr::read_tsv(opts$gene_features) %>%
   dplyr::mutate(
     id = gsub(";.*", "", attributes)) %>%
   tidyr::separate_longer_delim(cols = "attributes", delim = ";") %>%
@@ -77,31 +79,6 @@ features <-
     # alternate exons for colouring
     exon_alternating = as.character(exon_number %% 2))
 
-# get mutations from Mitchell 2022, with calls in PB panel
-mut_annots <-
-  readr::read_tsv(opts$mut_annots) %>%
-  dplyr::filter(gene == opts$gene)
-if (nrow(mut_annots) > 0) {
-  mut_annots <-
-    mut_annots %>%
-    dplyr::right_join(
-      tibble::tibble(chr = unique(features$chr),
-                     pos = min(features$start):max(features$end)) %>%
-        dplyr::cross_join(tibble::tibble(name = unique(mut_annots$name)))) %>%
-    tidyr::pivot_wider() %>%
-    dplyr::mutate(
-      var_label = dplyr::case_when(alt_depth == 0 ~ NA,
-                                   !is.na(HGVSp) ~ HGVSp,
-                                   !is.na(HGVSc) ~ HGVSc,
-                                   TRUE ~ mut_ref),
-      label = dplyr::case_when(
-        !is.na(var_label) ~ sprintf("%s (%s/%s)", var_label, alt_depth,
-                                    total_depth),
-        TRUE ~ NA))
-} else {
-  mut_annots <- tibble::tibble()
-}
-
 # get coverage data
 cov <- readr::read_tsv(opts$cov)
 
@@ -110,7 +87,6 @@ cell_barcodes <- readLines(opts$cell_barcodes) %>% gsub("-1$", "", .)
 
 # get celltype annotations
 celltypes <- readr::read_csv(opts$celltypes)
-celltypes$barcode <- celltypes[, paste0("barcode_", opts$meta_kit), drop = TRUE]
 
 # get lists of celltype-annotated barcodes and list of all barcodes
 barcodes_ls <- split(celltypes$barcode, celltypes$celltype)
@@ -145,6 +121,9 @@ cov_per_ct <-
       dplyr::mutate(coverage = as.numeric(coverage),
                     n_cells = as.numeric(n_cells),
                     total_cells = length(CBs))
+    
+    # return
+    counts
 
   }) %>%
   dplyr::bind_rows(.id = "celltype") %>%
@@ -168,24 +147,10 @@ exonic_cov <-
   dplyr::ungroup() %>%
   dplyr::mutate(total_cells = total_cells_all_cts)
 
-# get average coverage per cell across the cCDS
-# TODO: add metric of coverage per base per expressing cell
-# expressing cells are cells with any coverage in the gene
-cov_per_ct %>%
-  dplyr::right_join(regions[["ccds"]]) %>%
-  dplyr::mutate(n_cells_x_cov = n_cells * coverage) %>%
-  dplyr::summarise(
-    total_cov = sum(n_cells_x_cov),
-    total_cells_x_bases = sum(n_cells),
-    avg_cov_per_base_per_cell = total_cov / total_cells_x_bases) %>%
-  readr::write_tsv(paste0(opts$meta_run, "_", opts$gene,
-                          "_avg_coverage_per_ccds_base_per_cell.tsv"))
-
 # save
 g %>% saveRDS(paste0(opts$meta_run, "_", opts$gene, ".rds"))
 regions %>% saveRDS(paste0(opts$meta_run, "_", opts$gene, "_regions.rds"))
 features %>% saveRDS(paste0(opts$meta_run, "_", opts$gene, "_features.rds"))
-mut_annots %>% saveRDS(paste0(opts$meta_run, "_", opts$gene, "_mut_annots.rds"))
 cov_per_ct %>% saveRDS(paste0(opts$meta_run, "_", opts$gene, "_cov_per_ct.rds"))
 exonic_cov %>% readr::write_tsv(paste0(opts$meta_run, "_", opts$gene,
                                        "_coverage_per_exonic_position.tsv"))

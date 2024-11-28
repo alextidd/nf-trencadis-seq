@@ -9,21 +9,30 @@ library(optparse)
 # parse arguments
 option_list <- list(
   make_option("--meta_run", type = "character"),
-  make_option("--meta_seq_type", type = "character"),
-  make_option("--meta_kit", type = "character"),
   make_option("--gene", type = "character"),
+  make_option("--geno_per_ct", type = "character"),
   make_option("--min_cov", type = "numeric"),
   make_option("--plot_device", type = "character"))
 opts <- parse_args(OptionParser(option_list = option_list))
 saveRDS(opts, "opts.rds")
 # opts <- readRDS("opts.rds")
 
-# read plot data
+print(opts)
+
+# read in genotyped mutations (must explicitly set col_types because ref/alt 
+# values of T will be interpreted as boolean column of TRUE)
+geno_per_ct <-
+  readr::read_tsv(opts$geno_per_ct,
+                  col_types = readr::cols(ref = readr::col_character(),
+                                          alt = readr::col_character()))
+
+# read coverage data
+cov_per_ct <- readRDS(paste0(opts$meta_run, "_", opts$gene, "_cov_per_ct.rds"))
+
+# read gene data
 g <- readRDS(paste0(opts$meta_run, "_", opts$gene, ".rds"))
 regions <- readRDS(paste0(opts$meta_run, "_", opts$gene, "_regions", ".rds"))
 features <- readRDS(paste0(opts$meta_run, "_", opts$gene, "_features.rds"))
-mut_annots <- readRDS(paste0(opts$meta_run, "_", opts$gene, "_mut_annots.rds"))
-cov_per_ct <- readRDS(paste0(opts$meta_run, "_", opts$gene, "_cov_per_ct.rds"))
 
 # functions
 p_facet_theme <-
@@ -34,14 +43,10 @@ p_facet_theme <-
         strip.background = element_rect(color = "grey", fill = NA,
                                         linewidth = 0.1, linetype = "solid"))
 
-plot_wgs_mutations <-
+plot_mutations <-
   function(p_dat, facet_by_region = FALSE,
-           muts_subtitle = "SNVs called in WGS from Mitchell 2022") {
-    n_muts <-
-      p_dat %>%
-      dplyr::filter(!is.na(mut_ref)) %>%
-      dplyr::pull(mut_ref) %>%
-      dplyr::n_distinct()
+           muts_subtitle = "mutations") {
+    n_muts <- dplyr::n_distinct(p_dat$mut_id, na.rm = TRUE)
     p <-
       p_dat %>%
       dplyr::select(dplyr::any_of(c("pos", "mut_type", "ref", "alt",
@@ -64,18 +69,17 @@ plot_wgs_mutations <-
     p
   }
 
-plot_mutations <-
+plot_genotyped_mutations <-
   function(p_dat, facet_by_region = FALSE,
-           muts_subtitle = "SNVs called in WGS from Mitchell 2022") {
-    p <-
-      p_dat %>%
+           muts_subtitle = "mutations") {
+    p_dat %>%
       dplyr::mutate(
         mut_type = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
                                     TRUE ~ mut_type),
-        mut_ref = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
-                                   TRUE ~ mut_ref)) %>%
-      plot_wgs_mutations(facet_by_region = facet_by_region,
-                         muts_subtitle = muts_subtitle)
+        mut_id = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
+                                  TRUE ~ mut_id)) %>%
+      plot_mutations(facet_by_region = facet_by_region,
+                     muts_subtitle = muts_subtitle)
   }
 
 plot_transcripts <- function(p_dat, facet_by_region = FALSE) {
@@ -187,11 +191,11 @@ plot_ge <- function(p_dat, facet_by_region = FALSE) {
   p
 }
 
-plot_mut_pie <- function(cov_per_ct, mut_annots, g, p_title) {
+plot_mut_pie <- function(cov_per_ct, mutations, g, p_title) {
 
   # sort ct order
   ct_order <-
-    mut_annots %>%
+    mutations %>%
     dplyr::filter(!is.na(celltype)) %>%
     dplyr::pull(celltype) %>%
     {c("unannotated", ., "all")} %>%
@@ -199,16 +203,16 @@ plot_mut_pie <- function(cov_per_ct, mut_annots, g, p_title) {
 
   # get mut sites only
   mut_sites <-
-    mut_annots %>%
-    dplyr::filter(!is.na(mut_ref), run == opts$meta_run) %>%
+    mutations %>%
+    dplyr::filter(!is.na(mut_id), run == opts$meta_run) %>%
     dplyr::mutate(
-      region = mut_ref,
+      region = mut_id,
       radius = 0.45,
       celltype = factor(celltype, levels = ct_order),
       celltype_n = as.integer(celltype),
       arr = ifelse(g$strand == "+", pos, -pos),
-      mut_ref = forcats::fct_reorder(mut_ref, arr),
-      mut_ref_n = as.integer(mut_ref),
+      mut_id = forcats::fct_reorder(mut_id, arr),
+      mut_ref_n = as.integer(mut_id),
       label = paste0(ifelse(total_depth == 0, "-", round(100 * alt_depth / total_depth, 1)),
                      "%\n", alt_depth, "/", total_depth),
       `variant detected?` = ifelse(alt_depth > 0, "yes", NA)) %>%
@@ -226,7 +230,7 @@ plot_mut_pie <- function(cov_per_ct, mut_annots, g, p_title) {
     geom_text(aes(label = label)) +
     coord_equal() +
     scale_x_continuous(breaks = unique(mut_sites$mut_ref_n),
-                       labels = unique(mut_sites$mut_ref),
+                       labels = unique(mut_sites$mut_id),
                        guide = guide_axis(angle = -45),
                        expand = c(0, 0)) +
     scale_y_continuous(breaks = unique(mut_sites$celltype_n),
@@ -248,12 +252,12 @@ plot_mut_pie <- function(cov_per_ct, mut_annots, g, p_title) {
     cov_per_ct %>%
     dplyr::mutate(celltype = factor(celltype, levels = ct_order)) %>%
     dplyr::inner_join(mut_sites, by = c("celltype", "chr", "pos", "gene")) %>%
-    dplyr::group_by(mut_ref, celltype, `variant detected?`) %>%
+    dplyr::group_by(mut_id, celltype, `variant detected?`) %>%
     dplyr::summarise(
       n_cells_w_cov = sum(n_cells[coverage >= 1]),
       n_cells_total = sum(n_cells),
       `% of cells\nw/ reads` = 100 * n_cells_w_cov / n_cells_total) %>%
-    ggplot(aes(x = mut_ref, y = celltype)) +
+    ggplot(aes(x = mut_id, y = celltype)) +
     geom_tile(aes(fill = `% of cells\nw/ reads`), width = 1) +
     geom_tile(aes(colour = `variant detected?`), fill = NA, linewidth = 1) +
     geom_label(aes(label = paste0(round(`% of cells\nw/ reads`, 1), "%\n",
@@ -278,8 +282,8 @@ plot_mut_pie <- function(cov_per_ct, mut_annots, g, p_title) {
                   dist_polyA = abs(pos - pos_polyA),
                   lab_polyA = prettyNum(dist_polyA, big.mark = ",",
                                         scientific = FALSE)) %>%
-    dplyr::distinct(mut_ref, dist_polyA, lab_polyA) %>%
-    ggplot(aes(x = mut_ref, y = dist_polyA)) +
+    dplyr::distinct(mut_id, dist_polyA, lab_polyA) %>%
+    ggplot(aes(x = mut_id, y = dist_polyA)) +
     geom_col() +
     geom_text(aes(label = lab_polyA), vjust = 1.5) +
     theme_void() +
@@ -299,21 +303,21 @@ p_subtitle <- paste0(opts$meta_run, " ", opts$gene, " (", g$strand, " strand, ",
                      "bp, min coverage = ", opts$min_cov, ")")
 
 # plot mutations from Mitchell 2022
-if (nrow(mut_annots) > 0) {
+if (nrow(geno_per_ct) > 0) {
   p[["genic"]][["wgs_mutations"]] <-
-    plot_wgs_mutations(
-      mut_annots,
-      muts_subtitle = "SNVs called in WGS from Mitchell 2022")
+    plot_mutations(
+      geno_per_ct,
+      muts_subtitle = "mutations")
   p[["exonic"]][["wgs_mutations"]] <-
-    plot_wgs_mutations(
-      dplyr::right_join(mut_annots, regions[["exonic"]]),
+    plot_mutations(
+      dplyr::right_join(geno_per_ct, regions[["exonic"]]),
       facet_by_region = TRUE,
-      muts_subtitle = "exonic SNVs called in WGS from Mitchell 2022")
+      muts_subtitle = "exonic mutations")
   p[["ccds"]][["wgs_mutations"]] <-
-    plot_wgs_mutations(
-      dplyr::right_join(mut_annots, regions[["ccds"]]),
+    plot_mutations(
+      dplyr::right_join(geno_per_ct, regions[["ccds"]]),
       facet_by_region = TRUE,
-      muts_subtitle = "cCDS SNVs called in WGS from Mitchell 2022")
+      muts_subtitle = "cCDS mutations")
   p_wgs_muts_height <- 0.5
 } else {
   p[["genic"]][["wgs_mutations"]] <- ggplot() + theme_void()
@@ -323,24 +327,24 @@ if (nrow(mut_annots) > 0) {
 }
 
 # plot mutations from PB panel
-if (opts$meta_kit == "PB" & opts$meta_seq_type == "panel" & nrow(mut_annots) > 0) {
+if (sum(geno_per_ct$alt_depth) > 0) {
 
   # plot mutations
   p[["genic"]][["mutations"]] <-
-    plot_mutations(mut_annots,
-                   muts_subtitle = "mutations called")
+    plot_genotyped_mutations(geno_per_ct,
+                             muts_subtitle = "mutations called")
   p[["exonic"]][["mutations"]] <-
-    plot_mutations(dplyr::right_join(mut_annots, regions[["exonic"]]),
-                   facet_by_region = TRUE,
-                   muts_subtitle = "exonic mutations called")
+    plot_genotyped_mutations(dplyr::right_join(geno_per_ct, regions[["exonic"]]),
+                             facet_by_region = TRUE,
+                             muts_subtitle = "exonic mutations called")
   p[["ccds"]][["mutations"]] <-
-    plot_mutations(dplyr::right_join(mut_annots, regions[["ccds"]]),
-                   facet_by_region = TRUE,
-                   muts_subtitle = "cCDS mutations called")
+    plot_genotyped_mutations(dplyr::right_join(geno_per_ct, regions[["ccds"]]),
+                             facet_by_region = TRUE,
+                              muts_subtitle = "cCDS mutations called")
   p_muts_height <- 0.5
 
   # plot mut pie, save
-  p_mut_pie <- plot_mut_pie(cov_per_ct, mut_annots, g, p_subtitle)
+  p_mut_pie <- plot_mut_pie(cov_per_ct, geno_per_ct, g, p_subtitle)
   saveRDS(p_mut_pie, paste0(opts$meta_run, "_", opts$gene,
                             "_pie_mutations_plot.rds"))
   ggsave(
