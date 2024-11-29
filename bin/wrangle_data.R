@@ -29,6 +29,12 @@ g <- readr::read_tsv(opts$gene_bed,
 # create list of regions
 regions <- list()
 
+# get genic regions
+regions[["genic"]] <-
+  g %>%
+  dplyr::group_by(chr, gene, strand) %>%
+  dplyr::reframe(pos = start:end)
+
 # get exonic regions
 regions[["exonic"]] <-
   readr::read_tsv(opts$exonic_bed,

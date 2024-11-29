@@ -192,7 +192,7 @@ process collate_gene_coords {
 
 // subset the BAM to only reads in the genes
 process subset_bam_to_genes {
-  tag "${meta.run}_${gene}"
+  tag "${meta.run}_${meta.gene}"
   label 'normal'
 
   input:
@@ -200,7 +200,7 @@ process subset_bam_to_genes {
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
-        val(gene), path(gene_bed), path(gene_features), path(exonic_bed)
+        path(gene_bed), path(gene_features), path(exonic_bed)
 
   output:
   tuple val(meta),
@@ -209,7 +209,7 @@ process subset_bam_to_genes {
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
-        val(gene), path(gene_bed), path(gene_features), path(exonic_bed)
+        path(gene_bed), path(gene_features), path(exonic_bed)
 
   script:
   """
@@ -225,9 +225,9 @@ process subset_bam_to_genes {
 
 // subset the BAM to only reads from barcodes of interest
 process subset_bam_to_barcodes {
-  tag "${meta.run}_${gene}"
+  tag "${meta.run}_${meta.gene}"
   label 'normal'
-  publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
+  publishDir "${params.out_dir}/runs/${meta.run}/${meta.gene}/",
     mode: "copy",
     pattern: "*_subset.{bam,bam.bai}"
 
@@ -237,7 +237,7 @@ process subset_bam_to_barcodes {
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
-        val(gene), path(gene_bed), path(gene_features), path(exonic_bed)
+        path(gene_bed), path(gene_features), path(exonic_bed)
 
   output:
   tuple val(meta),
@@ -245,7 +245,7 @@ process subset_bam_to_barcodes {
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
-        val(gene), path(gene_bed), path(gene_features), path(exonic_bed)
+        path(gene_bed), path(gene_features), path(exonic_bed)
 
   script:
   """
@@ -264,9 +264,9 @@ process subset_bam_to_barcodes {
 
 // split subsetted BAMs by cell, count coverage
 process get_coverage_per_cell {
-  tag "${meta.run}_${gene}"
+  tag "${meta.run}_${meta.gene}"
   label 'week10gb'
-  publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
+  publishDir "${params.out_dir}/runs/${meta.run}/${meta.gene}/",
     mode: "copy",
     pattern: "*_coverage_per_cell.tsv"
 
@@ -275,15 +275,15 @@ process get_coverage_per_cell {
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
-        val(gene), path(gene_bed), path(gene_features), path(exonic_bed)
+        path(gene_bed), path(gene_features), path(exonic_bed)
 
   output:
-  tuple val(meta), path("${meta.run}_${gene}_coverage_per_cell.tsv"),
+  tuple val(meta), path("${meta.run}_${meta.gene}_coverage_per_cell.tsv"),
         path(celltypes),
         path(cell_barcodes),
-        val(gene), path(gene_bed), path(gene_features), path(exonic_bed),
+        path(gene_bed), path(gene_features), path(exonic_bed),
         emit: cov
-  tuple val(meta), val(gene),
+  tuple val(meta),
         path(celltypes), path(mutations), path(gene_bed),
         path("cell_bams/*"),
         emit: cell_bams
@@ -291,6 +291,12 @@ process get_coverage_per_cell {
   script:
   """
   module load samtools-1.19/python-3.12.0
+
+  # get gene info
+  chr=\$(cut -f1 ${gene_bed})
+  start=\$(cut -f2 ${gene_bed})
+  end=\$(cut -f3 ${gene_bed})
+  echo "${meta.gene} - chr: \$chr, start: \$start, end: \$end"
 
   echo "getting cell barcodes"
   # get unique cell barcodes in the BAM, trim CB:Z: prefix
@@ -312,60 +318,52 @@ process get_coverage_per_cell {
     rm \$CB.txt
   done < cell_barcodes.txt
 
-  # run per gene
-  while read -r chr start end gene strand ; do
+  # initialise gene coverage file
+  rm -rf ${meta.gene} ; mkdir ${meta.gene}
+  touch ${meta.gene}_cov.tsv
 
-    echo "processing gene \$gene"
-
-    # initialise gene coverage file
-    rm -rf \${gene} ; mkdir \${gene}
-    touch \${gene}_cov.tsv
-
-    echo "calculating coverage per base per cell"
-    while read -r CB ; do
-      (
-        echo "\$CB" ;
-        samtools depth \\
-          -a --min-BQ ${params.min_BQ} --min-MQ ${params.min_MQ} \\
-          -r \$chr:\$start-\$end cell_bams/\$CB.bam \\
-        | cut -f3 ;
-      ) > \${gene}/\$CB.tsv
-    done < cell_barcodes.txt
-
-    echo "creating coverage file"
+  echo "calculating coverage per base per cell"
+  while read -r CB ; do
     (
-      echo -e "chr\\tpos\\tgene" ;
-      echo -e "\$chr\\t\$start\\t\$end" \
-      | awk -F"\\t" -v gene=\$gene -v OFS="\\t" \
-        '{for(i=\$2; i<=\$3; i++) print \$1, i, gene}' ;
-    ) > \${gene}_coords.tsv
+      echo "\$CB" ;
+      samtools depth \\
+        -a --min-BQ ${params.min_BQ} --min-MQ ${params.min_MQ} \\
+        -r \$chr:\$start-\$end cell_bams/\$CB.bam \\
+      | cut -f3 ;
+    ) > ${meta.gene}/\$CB.tsv
+  done < cell_barcodes.txt
 
-    echo "adding coverage per cell to coverage file"
-    # (sort for consistent ordering)
-    paste \$(ls \${gene}/*.tsv | sort) > \${gene}_cov.tsv
+  echo "creating coverage file"
+  (
+    echo -e "chr\\tpos\\tgene" ;
+    echo -e "\$chr\\t\$start\\t\$end" \
+    | awk -F"\\t" -v gene=${meta.gene} -v OFS="\\t" \
+      '{for(i=\$2; i<=\$3; i++) print \$1, i, gene}' ;
+  ) > ${meta.gene}_coords.tsv
 
-    # combine coords and coverage
-    paste \${gene}_coords.tsv \${gene}_cov.tsv > \${gene}_cov_per_cell.tsv
-
-  done < ${gene_bed}
+  echo "adding coverage per cell to coverage file"
+  # (sort for consistent ordering)
+  find ${meta.gene} -name "*.tsv" | sort | xargs paste \\
+  > ${meta.gene}_cov.tsv
 
   echo "combining outputs"
-  ls *_cov_per_cell.tsv | head -1 | xargs head -1 \
-  > ${meta.run}_${gene}_coverage_per_cell.tsv
-  cat *_cov_per_cell.tsv | grep -vP "^chr\\tpos" \
-  >> ${meta.run}_${gene}_coverage_per_cell.tsv
+  paste ${meta.gene}_coords.tsv ${meta.gene}_cov.tsv > ${meta.gene}_cov_per_cell.tsv
+  ls *_cov_per_cell.tsv | head -1 | xargs head -1 \\
+  > ${meta.run}_${meta.gene}_coverage_per_cell.tsv
+  cat *_cov_per_cell.tsv | grep -vP "^chr\\tpos" \\
+  >> ${meta.run}_${meta.gene}_coverage_per_cell.tsv
   """
 }
 
 // genotype the mutations
 process genotype_mutations {
-  tag "${meta.run}_${gene}"
+  tag "${meta.run}_${meta.gene}"
   label 'normal10gb'
-  publishDir "${params.out_dir}/runs/${meta.run}/${gene}/",
+  publishDir "${params.out_dir}/runs/${meta.run}/${meta.gene}/",
     mode: "copy"
   
   input:
-  tuple val(meta), val(gene),
+  tuple val(meta),
         path(celltypes), path(mutations), path(gene_bed),
         path(cell_bams, stageAs: "cell_bams/*")
   
@@ -390,7 +388,7 @@ process genotype_mutations {
 
 // wrangle data for plots
 process wrangle_data {
-  tag "${meta.run}_${gene}"
+  tag "${meta.run}_${meta.gene}"
   label 'normal20gb'
   maxRetries 10
   
@@ -399,21 +397,21 @@ process wrangle_data {
         path(cov),
         path(celltypes),
         path(cell_barcodes),
-        val(gene), path(gene_bed), path(gene_features), path(exonic_bed),
+        path(gene_bed), path(gene_features), path(exonic_bed),
         path(geno_per_ct)
   path(refcds)
 
   output:
-  tuple val(meta), val(gene), path("*.rds"), path(geno_per_ct),
+  tuple val(meta), path("*.rds"), path(geno_per_ct),
         emit: plot_data
-  tuple val(gene),
-        path("${meta.run}_${gene}_coverage_per_exonic_position.tsv"),
+  tuple val(meta),
+        path("${meta.run}_${meta.gene}_coverage_per_exonic_position.tsv"),
         emit: exonic_coverage
 
   script:
   """
   wrangle_data.R \\
-    --gene ${gene} \\
+    --gene ${meta.gene} \\
     --gene_bed ${gene_bed} \\
     --exonic_bed ${exonic_bed} \\
     --refcds ${refcds} \\
@@ -427,24 +425,24 @@ process wrangle_data {
 
 // plot coverage
 process plot_coverage {
-  tag "${meta.run}_${gene}"
+  tag "${meta.run}_${meta.gene}"
   label 'normal10gb'
   maxRetries 10
-  publishDir "${params.out_dir}/runs/${meta.run}/${gene}/", mode: "copy"
+  publishDir "${params.out_dir}/runs/${meta.run}/${meta.gene}/", mode: "copy"
   errorStrategy 'ignore'
 
   input:
-  tuple val(meta), val(gene), path(rdss), path(geno_per_ct)
+  tuple val(meta), path(rdss), path(geno_per_ct)
   
   output:
-  path("${meta.run}_${gene}_*_plot.${params.plot_device}")
-  path("${meta.run}_${gene}_pie_mutations_plot.rds"), optional: true
+  path("${meta.run}_${meta.gene}_*_plot.${params.plot_device}")
+  path("${meta.run}_${meta.gene}_pie_mutations_plot.rds"), optional: true
 
   script:
   """
   plot_coverage.R \\
     --meta_run ${meta.run} \\
-    --gene ${gene} \\
+    --gene ${meta.gene} \\
     --geno_per_ct ${geno_per_ct} \\
     --min_cov ${params.min_cov} \\
     --plot_device ${params.plot_device}
@@ -527,8 +525,14 @@ workflow {
   get_gene_coords.out.gene_bed.collect()
   | collate_gene_coords
 
-  // subset bams
+  // combine gene-x-id, subset bams
   ch_checked_bam.combine(get_gene_coords.out.gene_features)
+  | map { meta, bam, bai, celltypes, mutations, cell_barcodes,
+          gene, gene_bed, gene_features, exonic_bed ->
+          [meta + [gene: gene],
+           bam, bai, celltypes, mutations, cell_barcodes, 
+           gene_bed, gene_features, exonic_bed]
+  }
   | subset_bam_to_genes
   | subset_bam_to_barcodes
 

@@ -191,11 +191,11 @@ plot_ge <- function(p_dat, facet_by_region = FALSE) {
   p
 }
 
-plot_mut_pie <- function(cov_per_ct, mutations, g, p_title) {
+plot_mut_pie <- function(cov_per_ct, geno_per_ct, g, p_title) {
 
   # sort ct order
   ct_order <-
-    mutations %>%
+    geno_per_ct %>%
     dplyr::filter(!is.na(celltype)) %>%
     dplyr::pull(celltype) %>%
     {c("unannotated", ., "all")} %>%
@@ -203,8 +203,8 @@ plot_mut_pie <- function(cov_per_ct, mutations, g, p_title) {
 
   # get mut sites only
   mut_sites <-
-    mutations %>%
-    dplyr::filter(!is.na(mut_id), run == opts$meta_run) %>%
+    geno_per_ct %>%
+    dplyr::filter(!is.na(mut_id)) %>%
     dplyr::mutate(
       region = mut_id,
       radius = 0.45,
@@ -232,14 +232,14 @@ plot_mut_pie <- function(cov_per_ct, mutations, g, p_title) {
     scale_x_continuous(breaks = unique(mut_sites$mut_ref_n),
                        labels = unique(mut_sites$mut_id),
                        guide = guide_axis(angle = -45),
-                       expand = c(0, 0)) +
+                       expand = c(0.01, 0.01)) +
     scale_y_continuous(breaks = unique(mut_sites$celltype_n),
                        labels = unique(mut_sites$celltype),
-                       expand = c(0, 0)) +
+                       expand = c(0.01, 0.01)) +
     theme_minimal() +
     scale_fill_manual(values = c("ref_depth" = "#c0d7fa",
                                  "alt_depth" = "#eabac7")) +
-    scale_colour_manual(values = c("yes" = "red"), na.translate = FALSE,
+    scale_colour_manual(values = c("yes" = "#b30000"), na.translate = FALSE,
                         na.value = NA) +
     labs(x = "variant", title = p_title,
           subtitle = "Proportion of alt reads / all reads at the site") +
@@ -275,23 +275,8 @@ plot_mut_pie <- function(cov_per_ct, mutations, g, p_title) {
     coord_equal() +
     labs(subtitle = "Proportion of cells with at least 1 read at the site")
 
-  # plot distance from polyA
-  p_dist_poly_a <-
-    mut_sites %>%
-    dplyr::mutate(pos_polyA = ifelse(g$strand == "+", g$end, g$start),
-                  dist_polyA = abs(pos - pos_polyA),
-                  lab_polyA = prettyNum(dist_polyA, big.mark = ",",
-                                        scientific = FALSE)) %>%
-    dplyr::distinct(mut_id, dist_polyA, lab_polyA) %>%
-    ggplot(aes(x = mut_id, y = dist_polyA)) +
-    geom_col() +
-    geom_text(aes(label = lab_polyA), vjust = 1.5) +
-    theme_void() +
-    labs(subtitle = "Genomic distance from polyA site") +
-    scale_y_reverse()
-
   # patchwork
-  p_mut_pie / p_mut_ge / p_dist_poly_a
+  p_mut_pie / p_mut_ge
 }
 
 # initialise list of lists plots
@@ -306,7 +291,7 @@ p_subtitle <- paste0(opts$meta_run, " ", opts$gene, " (", g$strand, " strand, ",
 if (nrow(geno_per_ct) > 0) {
   p[["genic"]][["wgs_mutations"]] <-
     plot_mutations(
-      geno_per_ct,
+      dplyr::right_join(geno_per_ct, regions[["genic"]]),
       muts_subtitle = "mutations")
   p[["exonic"]][["wgs_mutations"]] <-
     plot_mutations(
@@ -350,8 +335,7 @@ if (sum(geno_per_ct$alt_depth) > 0) {
   ggsave(
     paste0(opts$meta_run, "_", opts$gene, "_pie_mutations_plot.",
            opts$plot_device),
-    p_mut_pie,
-    dpi = 500, width = 18, height = 18)
+    p_mut_pie, dpi = 500)
 
 } else {
   p[["genic"]][["mutations"]] <- ggplot() + theme_void()
