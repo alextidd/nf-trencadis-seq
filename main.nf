@@ -21,7 +21,7 @@ include { validateParameters; paramsHelp; paramsSummaryLog; samplesheetToList } 
 // Then either retrieve the BAI or make one via indexing
 // The maxForks of 10 was set after asking jc18 about best iRODS practices
 process irods {
-  tag "${meta.run}"
+  tag "${meta.id}"
   maxForks 10
   label 'normal4core'
 
@@ -30,17 +30,17 @@ process irods {
         path(celltypes), path(mutations), path(cell_barcodes)
   
   output:
-  tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai"),
+  tuple val(meta), path("${meta.id}.bam"), path("${meta.id}.bam.bai"),
         path(celltypes), path(mutations), path(cell_barcodes)
   
   script:
   """
-  iget -K ${bam} ${meta.run}.bam
+  iget -K ${bam} ${meta.id}.bam
   if [[ `ils ${bam}.bai | wc -l` == 1 ]]
   then
-      iget -K ${bam}.bai ${meta.run}.bam.bai
+      iget -K ${bam}.bai ${meta.id}.bam.bai
   else
-      samtools index -@ ${task.cpus} ${meta.run}.bam
+      samtools index -@ ${task.cpus} ${meta.id}.bam
   fi
   """
 }
@@ -48,7 +48,7 @@ process irods {
 // The equivalent of an irods download, but for a local copy of samplesheet
 // Symlink the BAM/BAI appropriately so they're named the right thing for downstream
 process local {
-  tag "${meta.run}"
+  tag "${meta.id}"
   maxForks 10
   label 'normal4core'
 
@@ -57,24 +57,24 @@ process local {
         path(celltypes), path(mutations), path(cell_barcodes)
 
   output:
-  tuple val(meta), path("${meta.run}.bam"), path("${meta.run}.bam.bai"),
+  tuple val(meta), path("${meta.id}.bam"), path("${meta.id}.bam.bai"),
         path(celltypes), path(mutations), path(cell_barcodes)
 
   script:
   """
   # create local symbolic link 
-  ln -s ${bam} ${meta.run}.bam
+  ln -s ${bam} ${meta.id}.bam
   if [ -f "${bam}.bai" ] ; then
-      ln -s ${bam}.bai ${meta.run}.bam.bai
+      ln -s ${bam}.bai ${meta.id}.bam.bai
   else
-      samtools index -@ ${task.cpus} ${meta.run}.bam
+      samtools index -@ ${task.cpus} ${meta.id}.bam
   fi
   """
 }
 
 // check bam is not truncated before proceeding
 process check_bam {
-  tag "${meta.run}"
+  tag "${meta.id}"
   label 'normal'
   errorStrategy 'ignore'
 
@@ -192,7 +192,7 @@ process collate_gene_coords {
 
 // subset the BAM to only reads in the genes
 process subset_bam_to_genes {
-  tag "${meta.run}_${meta.gene}"
+  tag "${meta.id}_${meta.gene}"
   label 'normal'
 
   input:
@@ -204,8 +204,8 @@ process subset_bam_to_genes {
 
   output:
   tuple val(meta),
-        path("${meta.run}_subset_genes.bam"),
-        path("${meta.run}_subset_genes.bam.bai"),
+        path("${meta.id}_subset_genes.bam"),
+        path("${meta.id}_subset_genes.bam.bai"),
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
@@ -216,18 +216,18 @@ process subset_bam_to_genes {
   module load samtools-1.19/python-3.12.0 
 
   # subset to reads that fall in gene regions
-  samtools view -L ${gene_bed} -b ${bam} > ${meta.run}_subset_genes.bam
+  samtools view -L ${gene_bed} -b ${bam} > ${meta.id}_subset_genes.bam
 
   # index
-  samtools index -@ ${task.cpus} ${meta.run}_subset_genes.bam
+  samtools index -@ ${task.cpus} ${meta.id}_subset_genes.bam
   """
 }
 
 // subset the BAM to only reads from barcodes of interest
 process subset_bam_to_barcodes {
-  tag "${meta.run}_${meta.gene}"
+  tag "${meta.id}_${meta.gene}"
   label 'normal'
-  publishDir "${params.out_dir}/runs/${meta.run}/${meta.gene}/",
+  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
     mode: "copy",
     pattern: "*_subset.{bam,bam.bai}"
 
@@ -241,7 +241,7 @@ process subset_bam_to_barcodes {
 
   output:
   tuple val(meta),
-        path("${meta.run}_subset.bam"), path("${meta.run}_subset.bam.bai"),
+        path("${meta.id}_subset.bam"), path("${meta.id}_subset.bam.bai"),
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
@@ -255,18 +255,18 @@ process subset_bam_to_barcodes {
   subset-bam \
     -b ${bam} \
     --cell-barcodes ${cell_barcodes} \
-    --out-bam ${meta.run}_subset.bam
+    --out-bam ${meta.id}_subset.bam
   
   # index
-  samtools index -@ ${task.cpus} ${meta.run}_subset.bam
+  samtools index -@ ${task.cpus} ${meta.id}_subset.bam
   """
 }
 
 // split subsetted BAMs by cell, count coverage
 process get_coverage_per_cell {
-  tag "${meta.run}_${meta.gene}"
+  tag "${meta.id}_${meta.gene}"
   label 'week10gb'
-  publishDir "${params.out_dir}/runs/${meta.run}/${meta.gene}/",
+  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
     mode: "copy",
     pattern: "*_coverage_per_cell.tsv"
 
@@ -278,7 +278,7 @@ process get_coverage_per_cell {
         path(gene_bed), path(gene_features), path(exonic_bed)
 
   output:
-  tuple val(meta), path("${meta.run}_${meta.gene}_coverage_per_cell.tsv"),
+  tuple val(meta), path("${meta.id}_${meta.gene}_coverage_per_cell.tsv"),
         path(celltypes),
         path(cell_barcodes),
         path(gene_bed), path(gene_features), path(exonic_bed),
@@ -349,17 +349,17 @@ process get_coverage_per_cell {
   echo "combining outputs"
   paste ${meta.gene}_coords.tsv ${meta.gene}_cov.tsv > ${meta.gene}_cov_per_cell.tsv
   ls *_cov_per_cell.tsv | head -1 | xargs head -1 \\
-  > ${meta.run}_${meta.gene}_coverage_per_cell.tsv
+  > ${meta.id}_${meta.gene}_coverage_per_cell.tsv
   cat *_cov_per_cell.tsv | grep -vP "^chr\\tpos" \\
-  >> ${meta.run}_${meta.gene}_coverage_per_cell.tsv
+  >> ${meta.id}_${meta.gene}_coverage_per_cell.tsv
   """
 }
 
 // genotype the mutations
 process genotype_mutations {
-  tag "${meta.run}_${meta.gene}"
+  tag "${meta.id}_${meta.gene}"
   label 'normal10gb'
-  publishDir "${params.out_dir}/runs/${meta.run}/${meta.gene}/",
+  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
     mode: "copy"
   
   input:
@@ -388,7 +388,7 @@ process genotype_mutations {
 
 // wrangle data for plots
 process wrangle_data {
-  tag "${meta.run}_${meta.gene}"
+  tag "${meta.id}_${meta.gene}"
   label 'normal20gb'
   maxRetries 10
   
@@ -405,7 +405,7 @@ process wrangle_data {
   tuple val(meta), path("*.rds"), path(geno_per_ct),
         emit: plot_data
   tuple val(meta),
-        path("${meta.run}_${meta.gene}_coverage_per_exonic_position.tsv"),
+        path("${meta.id}_${meta.gene}_coverage_per_exonic_position.tsv"),
         emit: exonic_coverage
 
   script:
@@ -419,29 +419,29 @@ process wrangle_data {
     --cov ${cov} \\
     --cell_barcodes ${cell_barcodes} \\
     --celltypes ${celltypes} \\
-    --meta_run ${meta.run}
+    --meta_run ${meta.id}
   """
 }
 
 // plot coverage
 process plot_coverage {
-  tag "${meta.run}_${meta.gene}"
+  tag "${meta.id}_${meta.gene}"
   label 'normal10gb'
   maxRetries 10
-  publishDir "${params.out_dir}/runs/${meta.run}/${meta.gene}/", mode: "copy"
+  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/", mode: "copy"
   errorStrategy 'ignore'
 
   input:
   tuple val(meta), path(rdss), path(geno_per_ct)
   
   output:
-  path("${meta.run}_${meta.gene}_*_plot.${params.plot_device}")
-  path("${meta.run}_${meta.gene}_pie_mutations_plot.rds"), optional: true
+  path("${meta.id}_${meta.gene}_*_plot.${params.plot_device}")
+  path("${meta.id}_${meta.gene}_pie_mutations_plot.rds"), optional: true
 
   script:
   """
   plot_coverage.R \\
-    --meta_run ${meta.run} \\
+    --meta_run ${meta.id} \\
     --gene ${meta.gene} \\
     --geno_per_ct ${geno_per_ct} \\
     --min_cov ${params.min_cov} \\
@@ -488,9 +488,7 @@ workflow {
   Channel.fromPath(params.samplesheet, checkIfExists: true)
   | splitCsv(header: true)
   | map { row ->
-      def run = row.kit + "_" + row.seq_type + "_" + row.id
-      def meta = [id:row.id, seq_type:row.seq_type, kit:row.kit, run:run]
-      [meta,
+      [[id: row.id],
        file(row.bam, checkIfExists: true),
        file(row.celltypes, checkIfExists: true),
        file(row.mutations, checkIfExists: true),
