@@ -46,6 +46,8 @@ p_facet_theme <-
 plot_mutations <-
   function(p_dat, facet_by_region = FALSE,
            muts_subtitle = "mutations") {
+
+    mut_type_pal <- c("snv" = "#241623", "ins" = "#D0CD94", "del" = "#68B0B6")
     n_muts <- dplyr::n_distinct(p_dat$mut_id, na.rm = TRUE)
     p <-
       p_dat %>%
@@ -56,7 +58,8 @@ plot_mutations <-
       ggplot(aes(x = pos, y = 0, colour = mut_type)) +
       geom_point(na.rm = TRUE) +
       theme_void() +
-      scale_colour_discrete(na.translate = FALSE, na.value = NA) +
+      scale_colour_manual(values = mut_type_pal,
+                          na.translate = FALSE, na.value = NA) +
       scale_x_discrete(expand = c(0, 0)) +
       scale_y_discrete(expand = c(0, 0)) +
       labs(subtitle = paste(n_muts, muts_subtitle))
@@ -316,16 +319,19 @@ if (sum(geno_per_ct$alt_depth) > 0) {
 
   # plot mutations
   p[["genic"]][["mutations"]] <-
-    plot_genotyped_mutations(geno_per_ct,
-                             muts_subtitle = "mutations called")
+    plot_genotyped_mutations(
+      dplyr::right_join(geno_per_ct, regions[["genic"]]),
+      muts_subtitle = "mutations genotyped")
   p[["exonic"]][["mutations"]] <-
-    plot_genotyped_mutations(dplyr::right_join(geno_per_ct, regions[["exonic"]]),
-                             facet_by_region = TRUE,
-                             muts_subtitle = "exonic mutations called")
+    plot_genotyped_mutations(
+      dplyr::right_join(geno_per_ct, regions[["exonic"]]),
+      facet_by_region = TRUE,
+      muts_subtitle = "exonic mutations genotyped")
   p[["ccds"]][["mutations"]] <-
-    plot_genotyped_mutations(dplyr::right_join(geno_per_ct, regions[["ccds"]]),
-                             facet_by_region = TRUE,
-                              muts_subtitle = "cCDS mutations called")
+    plot_genotyped_mutations(
+      dplyr::right_join(geno_per_ct, regions[["ccds"]]),
+      facet_by_region = TRUE,
+      muts_subtitle = "cCDS mutations genotyped")
   p_muts_height <- 0.5
 
   # plot mut pie, save
