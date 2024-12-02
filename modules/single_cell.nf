@@ -9,17 +9,13 @@ process subset_bam_to_barcodes {
   input:
   tuple val(meta),
         path(bam), path(bai),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes),
+        path(mutations), path(celltypes), path(cell_barcodes),
         path(gene_bed), path(gene_regions), path(gene_features)
 
   output:
   tuple val(meta),
         path("${meta.id}_subset.bam"), path("${meta.id}_subset.bam.bai"),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes),
+        path(mutations), path(celltypes), path(cell_barcodes),
         path(gene_bed), path(gene_regions), path(gene_features)
 
   script:
@@ -47,19 +43,16 @@ process get_coverage_per_cell {
 
   input:
   tuple val(meta), path(bam), path(bai),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes),
+        path(mutations), path(celltypes), path(cell_barcodes),
         path(gene_bed), path(gene_regions), path(gene_features)
 
   output:
   tuple val(meta), path("${meta.id}_${meta.gene}_coverage_per_cell.tsv"),
-        path(celltypes),
-        path(cell_barcodes),
+        path(celltypes), path(cell_barcodes),
         path(gene_bed), path(gene_regions), path(gene_features),
         emit: cov
   tuple val(meta),
-        path(celltypes), path(mutations), path(gene_bed),
+        path(mutations), path(celltypes), path(gene_bed),
         path("cell_bams/*"),
         emit: cell_bams
 
@@ -139,8 +132,7 @@ process get_coverage_per_celltype {
   input:
   tuple val(meta),
         path(cov),
-        path(celltypes),
-        path(cell_barcodes),
+        path(celltypes), path(cell_barcodes),
         path(gene_bed), path(gene_regions), path(gene_features)
 
   output:

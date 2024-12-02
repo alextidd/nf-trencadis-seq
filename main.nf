@@ -29,11 +29,11 @@ process irods {
 
   input:
   tuple val(meta), val(bam),
-        path(celltypes), path(mutations), path(cell_barcodes)
+        path(mutations), path(celltypes), path(cell_barcodes)
   
   output:
   tuple val(meta), path("${meta.id}.bam"), path("${meta.id}.bam.bai"),
-        path(celltypes), path(mutations), path(cell_barcodes)
+        path(mutations), path(celltypes), path(cell_barcodes)
   
   script:
   """
@@ -56,11 +56,11 @@ process local {
 
   input:
   tuple val(meta), val(bam),
-        path(celltypes), path(mutations), path(cell_barcodes)
+        path(mutations), path(celltypes), path(cell_barcodes)
 
   output:
   tuple val(meta), path("${meta.id}.bam"), path("${meta.id}.bam.bai"),
-        path(celltypes), path(mutations), path(cell_barcodes)
+        path(mutations), path(celltypes), path(cell_barcodes)
 
   script:
   """
@@ -82,15 +82,11 @@ process check_bam {
 
   input:
   tuple val(meta), path(bam), path(bai),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes)
+        path(mutations), path(celltypes), path(cell_barcodes)
 
   output:
   tuple val(meta), path(bam), path(bai),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes)
+        path(mutations), path(celltypes), path(cell_barcodes)
 
   script:
   """
@@ -153,18 +149,14 @@ process subset_bam_to_genes {
 
   input:
   tuple val(meta), path(bam), path(bai),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes),
+        path(mutations), path(celltypes), path(cell_barcodes),
         path(gene_bed), path(gene_regions), path(gene_features)
 
   output:
   tuple val(meta),
         path("${meta.id}_subset_genes.bam"),
         path("${meta.id}_subset_genes.bam.bai"),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes),
+        path(mutations), path(celltypes), path(cell_barcodes),
         path(gene_bed), path(gene_regions), path(gene_features)
 
   script:
@@ -188,7 +180,8 @@ process genotype_mutations {
   
   input:
   tuple val(meta),
-        path(celltypes), path(mutations), path(gene_bed),
+        path(mutations), path(celltypes),
+        path(gene_bed),
         path(cell_bams, stageAs: "cell_bams/*")
   
   output:
@@ -283,8 +276,8 @@ workflow {
   | map { row ->
       [[id: row.id],
        file(row.bam, checkIfExists: true),
-       file(row.celltypes, checkIfExists: true),
        file(row.mutations, checkIfExists: true),
+       file(row.celltypes, checkIfExists: true),
        file(row.cell_barcodes, checkIfExists: true)]
   }
   | set { input }
@@ -318,36 +311,36 @@ workflow {
 
   // combine gene-x-id, subset bams
   ch_checked_bam.combine(get_gene_coords.out.gene_features)
-  | map { meta, bam, bai, celltypes, mutations, cell_barcodes,
+  | map { meta, bam, bai, mutations, celltypes, cell_barcodes,
           gene, gene_bed, gene_features, exonic_bed ->
           [meta + [gene: gene],
-           bam, bai, celltypes, mutations, cell_barcodes, 
+           bam, bai, mutations, celltypes, cell_barcodes, 
            gene_bed, gene_features, exonic_bed]
   }
   | subset_bam_to_genes
   | set { ch_bam_x_gene }
 
   // get coverage per cell or from bulk
-  single_cell(ch_bam_x_gene)
-  ch_cov_per_ct = single_cell.out.cov_per_ct
-  ch_cell_bams = single_cell.out.cell_bams
-  // if (params.bulk) {
-  //   bulk(ch_bam_x_gene)
-  //   ch_cov = bulk.out.cov
-  // } else {
-  //   single_cell(ch_bam_x_gene)
-  //   ch_cov = single_cell.out.cov
-  // }
+  
+  if (params.bulk) {
 
-  // genotype cells
-  genotype_mutations(ch_cell_bams)
+    // get coverage
+    bulk(ch_bam_x_gene)
 
-  // plot coverage
-  plot_coverage(ch_cov_per_ct.join(genotype_mutations.out.geno_per_ct))
+  } else {
 
-  // // plot coverage and mutations
-  // get_coverage_per_celltype(get_coverage_per_cell.out.cov)
-  // plot_coverage(get_coverage_per_celltype.out.plot_data)
+    // get coverage per celltype
+    single_cell(ch_bam_x_gene)
+    ch_cov_per_ct = single_cell.out.cov_per_ct
+    ch_cell_bams = single_cell.out.cell_bams
+
+    // genotype cells
+    genotype_mutations(ch_cell_bams)
+
+    // plot coverage
+    plot_coverage(ch_cov_per_ct.join(genotype_mutations.out.geno_per_ct))
+
+  }
 
   // // plot 5' drop-off per gene
   // ch_exonic_cov_per_gene = get_coverage_per_celltype.out.exonic_coverage.groupTuple()

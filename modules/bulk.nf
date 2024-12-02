@@ -46,7 +46,7 @@ workflow bulk {
 
   main:
   get_coverage(ch_bam_x_gene)
-
+  
   emit:
   get_coverage.out
 }
