@@ -68,6 +68,36 @@
       "type": "integer",
       "default": 0,
       "description": "Minimum base quality."
+    },
+    "config_profile_description": {
+      "type": "string",
+      "default": "The Wellcome Sanger Institute HPC cluster (farm22) profile"
+    },
+    "config_profile_contact": {
+      "type": "string",
+      "default": "Priyanka Surana (@priyanka-surana)"
+    },
+    "config_profile_url": {
+      "type": "string",
+      "default": "https://www.sanger.ac.uk"
+    },
+    "max_memory": {
+      "type": "string",
+      "default": "2.9 TB"
+    },
+    "max_cpus": {
+      "type": "integer",
+      "default": 256
+    },
+    "max_time": {
+      "type": "string",
+      "default": "30d"
+    },
+    "bulk": {
+      "type": "boolean"
+    },
+    "refcds": {
+      "type": "string"
     }
   },
   "required": ["samplesheet", "genes", "location", "gencode_gff3"]

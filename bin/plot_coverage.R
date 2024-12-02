@@ -8,15 +8,18 @@ library(optparse)
 
 # parse arguments
 option_list <- list(
-  make_option("--meta_run", type = "character"),
+  make_option("--meta_id", type = "character"),
   make_option("--gene", type = "character"),
+  make_option("--gene_bed", type = "character"),
+  make_option("--gene_regions", type = "character"),
+  make_option("--gene_features", type = "character"),
+  make_option("--cov_per_ct", type = "character"),
   make_option("--geno_per_ct", type = "character"),
   make_option("--min_cov", type = "numeric"),
   make_option("--plot_device", type = "character"))
 opts <- parse_args(OptionParser(option_list = option_list))
 saveRDS(opts, "opts.rds")
 # opts <- readRDS("opts.rds")
-
 print(opts)
 
 # read in genotyped mutations (must explicitly set col_types because ref/alt 
@@ -27,12 +30,13 @@ geno_per_ct <-
                                           alt = readr::col_character()))
 
 # read coverage data
-cov_per_ct <- readRDS(paste0(opts$meta_run, "_", opts$gene, "_cov_per_ct.rds"))
+cov_per_ct <- readRDS(opts$cov_per_ct)
 
 # read gene data
-g <- readRDS(paste0(opts$meta_run, "_", opts$gene, ".rds"))
-regions <- readRDS(paste0(opts$meta_run, "_", opts$gene, "_regions", ".rds"))
-features <- readRDS(paste0(opts$meta_run, "_", opts$gene, "_features.rds"))
+g <- readr::read_tsv(opts$gene_bed,
+                     col_names = c("chr", "start", "end", "gene", "strand"))
+gene_regions <- readRDS(opts$gene_regions)
+gene_features <- readRDS(opts$gene_features)
 
 # functions
 p_facet_theme <-
@@ -44,7 +48,7 @@ p_facet_theme <-
                                         linewidth = 0.1, linetype = "solid"))
 
 plot_mutations <-
-  function(p_dat, facet_by_region = FALSE,
+  function(p_dat, facet_by_region = FALSE, facet_by_celltype = FALSE,
            muts_subtitle = "mutations") {
 
     mut_type_pal <- c("snv" = "#241623", "ins" = "#D0CD94", "del" = "#68B0B6")
@@ -52,10 +56,11 @@ plot_mutations <-
     p <-
       p_dat %>%
       dplyr::select(dplyr::any_of(c("pos", "mut_type", "ref", "alt",
-                                    "region"))) %>%
+                                    "region", "celltype"))) %>%
       dplyr::mutate(mut = paste(ref, alt, sep = ">")) %>%
       dplyr::distinct() %>%
       ggplot(aes(x = pos, y = 0, colour = mut_type)) +
+      geom_hline(yintercept = 0, colour = "grey") +
       geom_point(na.rm = TRUE) +
       theme_void() +
       scale_colour_manual(values = mut_type_pal,
@@ -63,17 +68,29 @@ plot_mutations <-
       scale_x_discrete(expand = c(0, 0)) +
       scale_y_discrete(expand = c(0, 0)) +
       labs(subtitle = paste(n_muts, muts_subtitle))
-    if (facet_by_region) {
+
+    if (facet_by_region & facet_by_celltype) {
+      p <-
+        p +
+        facet_grid(celltype ~ region, scales = "free_x", space = "free_x") +
+        p_facet_theme
+    } else if (facet_by_region & !facet_by_celltype) {
       p <-
         p +
         facet_grid(. ~ region, scales = "free_x", space = "free_x") +
         p_facet_theme
+    } else if (!facet_by_region & facet_by_celltype) {
+      p <-
+        p +
+        facet_grid(celltype ~ .) +
+        p_facet_theme
     }
+
     p
   }
 
 plot_genotyped_mutations <-
-  function(p_dat, facet_by_region = FALSE,
+  function(p_dat, facet_by_region = FALSE, facet_by_celltype = FALSE,
            muts_subtitle = "mutations") {
     p_dat %>%
       dplyr::mutate(
@@ -82,17 +99,19 @@ plot_genotyped_mutations <-
         mut_id = dplyr::case_when(alt_depth == 0 | is.na(alt_depth) ~ NA,
                                   TRUE ~ mut_id)) %>%
       plot_mutations(facet_by_region = facet_by_region,
+                     facet_by_celltype = facet_by_celltype,
                      muts_subtitle = muts_subtitle)
   }
 
 plot_transcripts <- function(p_dat, facet_by_region = FALSE) {
   p <-
     p_dat %>%
+    dplyr::filter(type != "gene") %>%
     ggplot(aes(x = start, xend = end,
-                y = transcript_id, yend = transcript_id, size = type)) +
-    geom_segment(data = . %>% dplyr::filter(type != "start_codon"),
+               y = transcript_id, yend = transcript_id, linewidth = type)) +
+    geom_segment(data = . %>% dplyr::filter(type %in% c("transcript", "exon")),
                   aes(colour = exon_alternating)) +
-    scale_size_manual(values = c("transcript" = 0.5, "exon" = 3)) +
+    scale_linewidth_manual(values = c("transcript" = 0.5, "exon" = 3)) +
     scale_colour_manual(values = c("1" = "royalblue4", "0" = "steelblue3")) +
     facet_grid(transcript_type ~ ., space = "free_y", scales = "free_y") +
     theme_minimal() +
@@ -285,7 +304,7 @@ plot_mut_pie <- function(cov_per_ct, geno_per_ct, g, p_title) {
 # initialise list of lists plots
 p <- list()
 p[["genic"]] <- p[["exonic"]] <- p[["ccds"]] <- list()
-p_subtitle <- paste0(opts$meta_run, " ", opts$gene, " (", g$strand, " strand, ",
+p_subtitle <- paste0(opts$meta_id, " ", opts$gene, " (", g$strand, " strand, ",
                      prettyNum(g$end - g$start, big.mark = ",",
                                scientific = FALSE),
                      "bp, min coverage = ", opts$min_cov, ")")
@@ -294,16 +313,16 @@ p_subtitle <- paste0(opts$meta_run, " ", opts$gene, " (", g$strand, " strand, ",
 if (nrow(geno_per_ct) > 0) {
   p[["genic"]][["wgs_mutations"]] <-
     plot_mutations(
-      dplyr::right_join(geno_per_ct, regions[["genic"]]),
+      dplyr::right_join(geno_per_ct, gene_regions[["genic"]]),
       muts_subtitle = "mutations")
   p[["exonic"]][["wgs_mutations"]] <-
     plot_mutations(
-      dplyr::right_join(geno_per_ct, regions[["exonic"]]),
+      dplyr::right_join(geno_per_ct, gene_regions[["exonic"]]),
       facet_by_region = TRUE,
       muts_subtitle = "exonic mutations")
   p[["ccds"]][["wgs_mutations"]] <-
     plot_mutations(
-      dplyr::right_join(geno_per_ct, regions[["ccds"]]),
+      dplyr::right_join(geno_per_ct, gene_regions[["ccds"]]),
       facet_by_region = TRUE,
       muts_subtitle = "cCDS mutations")
   p_wgs_muts_height <- 0.5
@@ -320,26 +339,27 @@ if (sum(geno_per_ct$alt_depth) > 0) {
   # plot mutations
   p[["genic"]][["mutations"]] <-
     plot_genotyped_mutations(
-      dplyr::right_join(geno_per_ct, regions[["genic"]]),
+      dplyr::right_join(geno_per_ct, gene_regions[["genic"]]),
+      facet_by_celltype = TRUE,
       muts_subtitle = "mutations genotyped")
   p[["exonic"]][["mutations"]] <-
     plot_genotyped_mutations(
-      dplyr::right_join(geno_per_ct, regions[["exonic"]]),
-      facet_by_region = TRUE,
+      dplyr::right_join(geno_per_ct, gene_regions[["exonic"]]),
+      facet_by_region = TRUE, facet_by_celltype = TRUE,
       muts_subtitle = "exonic mutations genotyped")
   p[["ccds"]][["mutations"]] <-
     plot_genotyped_mutations(
-      dplyr::right_join(geno_per_ct, regions[["ccds"]]),
-      facet_by_region = TRUE,
+      dplyr::right_join(geno_per_ct, gene_regions[["ccds"]]),
+      facet_by_region = TRUE, facet_by_celltype = TRUE,
       muts_subtitle = "cCDS mutations genotyped")
-  p_muts_height <- 0.5
+  p_muts_height <- 1.2
 
   # plot mut pie, save
   p_mut_pie <- plot_mut_pie(cov_per_ct, geno_per_ct, g, p_subtitle)
-  saveRDS(p_mut_pie, paste0(opts$meta_run, "_", opts$gene,
+  saveRDS(p_mut_pie, paste0(opts$meta_id, "_", opts$gene,
                             "_pie_mutations_plot.rds"))
   ggsave(
-    paste0(opts$meta_run, "_", opts$gene, "_pie_mutations_plot.",
+    paste0(opts$meta_id, "_", opts$gene, "_pie_mutations_plot.",
            opts$plot_device),
     p_mut_pie, dpi = 500)
 
@@ -351,20 +371,21 @@ if (sum(geno_per_ct$alt_depth) > 0) {
 }
 
 # plot transcripts
-p[["genic"]][["transcripts"]] <- plot_transcripts(features)
+p[["genic"]][["transcripts"]] <- plot_transcripts(gene_features)
 p[["exonic"]][["transcripts"]] <-
-  features %>%
+  gene_features %>%
   dplyr::group_by(dplyr::across(-c(start, end))) %>%
   dplyr::reframe(pos = start:end) %>%
-  dplyr::right_join(regions[["exonic"]] %>% dplyr::select(chr, region, pos)) %>%
+  dplyr::right_join(gene_regions[["exonic"]] %>%
+                      dplyr::select(chr, region, pos)) %>%
   dplyr::group_by(dplyr::across(-c(pos))) %>%
   dplyr::summarise(start = min(pos), end = max(pos)) %>%
   plot_transcripts(facet_by_region = TRUE)
 p[["ccds"]][["transcripts"]] <-
-  features %>%
+  gene_features %>%
   dplyr::group_by(dplyr::across(-c(start, end))) %>%
   dplyr::reframe(pos = start:end) %>%
-  dplyr::right_join(regions[["ccds"]]) %>%
+  dplyr::right_join(gene_regions[["ccds"]]) %>%
   dplyr::group_by(dplyr::across(-c(pos))) %>%
   dplyr::summarise(start = min(pos), end = max(pos)) %>%
   plot_transcripts(facet_by_region = TRUE)
@@ -373,21 +394,21 @@ p[["ccds"]][["transcripts"]] <-
 p[["genic"]][["cov"]] <-
   plot_cov(cov_per_ct)
 p[["exonic"]][["cov"]] <-
-  plot_cov(dplyr::right_join(cov_per_ct, regions[["exonic"]]),
+  plot_cov(dplyr::right_join(cov_per_ct, gene_regions[["exonic"]]),
            facet_by_region = TRUE, p_title = "Exonic coverage per cell")
 p[["ccds"]][["cov"]] <-
-  plot_cov(dplyr::right_join(cov_per_ct, regions[["ccds"]]),
+  plot_cov(dplyr::right_join(cov_per_ct, gene_regions[["ccds"]]),
            facet_by_region = TRUE, p_title = "Canonical CDS coverage per cell")
 
 # plot coverage, % cells
 p[["genic"]][["cov_pct"]] <-
   plot_cov(cov_per_ct, y_var = "percent_cells")
 p[["exonic"]][["cov_pct"]] <-
-  plot_cov(dplyr::right_join(cov_per_ct, regions[["exonic"]]),
+  plot_cov(dplyr::right_join(cov_per_ct, gene_regions[["exonic"]]),
            facet_by_region = TRUE, y_var = "percent_cells",
            p_title = "Exonic coverage per cell")
 p[["ccds"]][["cov_pct"]] <-
-  plot_cov(dplyr::right_join(cov_per_ct, regions[["ccds"]]),
+  plot_cov(dplyr::right_join(cov_per_ct, gene_regions[["ccds"]]),
            facet_by_region = TRUE, y_var = "percent_cells",
            p_title = "Canonical CDS coverage per cell")
 
@@ -398,12 +419,12 @@ p[["genic"]][["ge"]] <-
   plot_ge()
 p[["exonic"]][["ge"]] <-
   cov_per_ct %>%
-  dplyr::inner_join(regions[["exonic"]]) %>%
+  dplyr::inner_join(gene_regions[["exonic"]]) %>%
   dplyr::group_by(region, pos) %>%
   plot_ge(facet_by_region = TRUE)
 p[["ccds"]][["ge"]] <-
   cov_per_ct %>%
-  dplyr::inner_join(regions[["ccds"]]) %>%
+  dplyr::inner_join(gene_regions[["ccds"]]) %>%
   dplyr::group_by(region, pos) %>%
   plot_ge(facet_by_region = TRUE)
 
@@ -420,7 +441,7 @@ if (g$strand == "-") {
 # save plots
 purrr::walk2(names(p), p, function(lvl, p1) {
   ggsave(
-    paste0(opts$meta_run, "_", opts$gene, "_", lvl, "_cov_plot.",
+    paste0(opts$meta_id, "_", opts$gene, "_", lvl, "_cov_plot.",
            opts$plot_device),
     p1[["wgs_mutations"]] /
     p1[["mutations"]] /
@@ -430,7 +451,7 @@ purrr::walk2(names(p), p, function(lvl, p1) {
     plot_layout(heights = c(p_wgs_muts_height, p_muts_height, 4, 0.5, 2)),
     dpi = 500)
   ggsave(
-    paste0(opts$meta_run, "_", opts$gene, "_", lvl, "_cov_pct_plot.",
+    paste0(opts$meta_id, "_", opts$gene, "_", lvl, "_cov_pct_plot.",
            opts$plot_device),
     p1[["wgs_mutations"]] /
     p1[["mutations"]] /

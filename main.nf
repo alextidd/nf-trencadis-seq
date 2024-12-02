@@ -16,6 +16,8 @@ nextflow.enable.dsl=2
 
 // import functions / modules / subworkflows / workflows
 include { validateParameters; paramsHelp; paramsSummaryLog; samplesheetToList } from 'plugin/nf-schema'
+include { single_cell } from './modules/single_cell.nf'
+include { bulk        } from './modules/bulk.nf'
 
 // Download a given sample's BAM from iRODS
 // Then either retrieve the BAI or make one via indexing
@@ -113,62 +115,16 @@ process get_gene_coords {
   output:
   tuple val(gene),
         path("${gene}.bed"),
-        path("${gene}_features.tsv"),
-        path("${gene}_exonic_regions.bed"), emit: gene_features
+        path("${gene}_regions.rds"),
+        path("${gene}_features.rds"), emit: gene_features
   path "${gene}.bed", emit: gene_bed
 
   script:
   """
-  #!/usr/bin/env Rscript
-
-  # libraries
-  library(GenomicRanges)
-  library(magrittr)
-
-  # load the gff
-  gff <- ape::read.gff("${gencode_gff3}")
-
-  # load the refcds
-  load("${refcds}")
-  g <- RefCDS[[which(purrr::map_lgl(RefCDS, ~ .x\$gene_name == "${gene}"))]]
-  ccds <-
-    tibble::tibble(chr = paste0("chr", g\$chr), start = g\$intervals_cds[, 1],
-                   end = g\$intervals_cds[, 2], type = "ccds")
-
-  # get feature coords
-  features <-
-    gff %>%
-    dplyr::filter(
-      grepl("gene_name=${gene};", attributes),
-      # get protein-coding gene coords
-      (type == "gene" & grepl("gene_type=protein_coding;", attributes)) |
-      # get transcript / exon coords
-      (type %in% c("transcript", "exon"))) %>%
-    dplyr::transmute(chr = seqid, start, end, gene = "${gene}", strand,
-                     type, attributes) %>%
-    dplyr::bind_rows(ccds)
-  
-  # get the gene coords
-  gene_bed <-
-    features %>%
-    dplyr::filter(type == "gene") %>%
-    dplyr::select(chr, start, end, gene, strand)
-  
-  # collapse all exonic regions
-  exonic_regions <- 
-    features %>%
-    dplyr::filter(type == "exon") %>%
-    {GRanges(seqnames = .\$chr,
-             ranges = IRanges(.\$start, .\$end))} %>%
-    reduce() %>%
-    {tibble::tibble(chr = as.vector(seqnames(.)),
-                    start = start(.),
-                    end = end(.))}
-
-  # write
-  readr::write_tsv(features, "${gene}_features.tsv")
-  readr::write_tsv(gene_bed, "${gene}.bed", col_names = FALSE)
-  readr::write_tsv(exonic_regions, "${gene}_exonic_regions.bed", col_names = FALSE)
+  get_gene_coords.R \\
+    --gene ${gene} \\
+    --gencode_gff3 ${gencode_gff3} \\
+    --refcds ${refcds}
   """
 }
 
@@ -200,7 +156,7 @@ process subset_bam_to_genes {
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
-        path(gene_bed), path(gene_features), path(exonic_bed)
+        path(gene_bed), path(gene_regions), path(gene_features)
 
   output:
   tuple val(meta),
@@ -209,7 +165,7 @@ process subset_bam_to_genes {
         path(celltypes),
         path(mutations),
         path(cell_barcodes),
-        path(gene_bed), path(gene_features), path(exonic_bed)
+        path(gene_bed), path(gene_regions), path(gene_features)
 
   script:
   """
@@ -220,138 +176,6 @@ process subset_bam_to_genes {
 
   # index
   samtools index -@ ${task.cpus} ${meta.id}_subset_genes.bam
-  """
-}
-
-// subset the BAM to only reads from barcodes of interest
-process subset_bam_to_barcodes {
-  tag "${meta.id}_${meta.gene}"
-  label 'normal'
-  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
-    mode: "copy",
-    pattern: "*_subset.{bam,bam.bai}"
-
-  input:
-  tuple val(meta),
-        path(bam), path(bai),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes),
-        path(gene_bed), path(gene_features), path(exonic_bed)
-
-  output:
-  tuple val(meta),
-        path("${meta.id}_subset.bam"), path("${meta.id}_subset.bam.bai"),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes),
-        path(gene_bed), path(gene_features), path(exonic_bed)
-
-  script:
-  """
-  module load samtools-1.19/python-3.12.0 
-
-  # subset to cell barcodes
-  subset-bam \
-    -b ${bam} \
-    --cell-barcodes ${cell_barcodes} \
-    --out-bam ${meta.id}_subset.bam
-  
-  # index
-  samtools index -@ ${task.cpus} ${meta.id}_subset.bam
-  """
-}
-
-// split subsetted BAMs by cell, count coverage
-process get_coverage_per_cell {
-  tag "${meta.id}_${meta.gene}"
-  label 'week10gb'
-  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
-    mode: "copy",
-    pattern: "*_coverage_per_cell.tsv"
-
-  input:
-  tuple val(meta), path(bam), path(bai),
-        path(celltypes),
-        path(mutations),
-        path(cell_barcodes),
-        path(gene_bed), path(gene_features), path(exonic_bed)
-
-  output:
-  tuple val(meta), path("${meta.id}_${meta.gene}_coverage_per_cell.tsv"),
-        path(celltypes),
-        path(cell_barcodes),
-        path(gene_bed), path(gene_features), path(exonic_bed),
-        emit: cov
-  tuple val(meta),
-        path(celltypes), path(mutations), path(gene_bed),
-        path("cell_bams/*"),
-        emit: cell_bams
-
-  script:
-  """
-  module load samtools-1.19/python-3.12.0
-
-  # get gene info
-  chr=\$(cut -f1 ${gene_bed})
-  start=\$(cut -f2 ${gene_bed})
-  end=\$(cut -f3 ${gene_bed})
-  echo "${meta.gene} - chr: \$chr, start: \$start, end: \$end"
-
-  echo "getting cell barcodes"
-  # get unique cell barcodes in the BAM, trim CB:Z: prefix
-  samtools view ${bam} | cut -f12- | tr "\\t" "\\n" |
-  grep "CB:Z:" | sed 's/^CB:Z://g' | awk '!x[\$0]++' \
-  > cell_barcodes.txt
-
-  echo "creating a bam per cell"
-  rm -rf cell_bams ; mkdir -p cell_bams
-  while read -r CB ; do
-    # subset
-    echo \$CB > \$CB.txt
-    subset-bam \
-      -b ${bam} \
-      --cell-barcodes \$CB.txt \
-      --out-bam cell_bams/\$CB.bam
-    # index
-    samtools index -@ ${task.cpus} cell_bams/\$CB.bam
-    rm \$CB.txt
-  done < cell_barcodes.txt
-
-  # initialise gene coverage file
-  rm -rf ${meta.gene} ; mkdir ${meta.gene}
-  touch ${meta.gene}_cov.tsv
-
-  echo "calculating coverage per base per cell"
-  while read -r CB ; do
-    (
-      echo "\$CB" ;
-      samtools depth \\
-        -a --min-BQ ${params.min_BQ} --min-MQ ${params.min_MQ} \\
-        -r \$chr:\$start-\$end cell_bams/\$CB.bam \\
-      | cut -f3 ;
-    ) > ${meta.gene}/\$CB.tsv
-  done < cell_barcodes.txt
-
-  echo "creating coverage file"
-  (
-    echo -e "chr\\tpos\\tgene" ;
-    echo -e "\$chr\\t\$start\\t\$end" \
-    | awk -F"\\t" -v gene=${meta.gene} -v OFS="\\t" \
-      '{for(i=\$2; i<=\$3; i++) print \$1, i, gene}' ;
-  ) > ${meta.gene}_coords.tsv
-
-  echo "adding coverage per cell to coverage file"
-  # (sort for consistent ordering)
-  find ${meta.gene} -name "*.tsv" | sort | xargs paste \\
-  > ${meta.gene}_cov.tsv
-
-  echo "combining outputs"
-  paste ${meta.gene}_coords.tsv ${meta.gene}_cov.tsv > ${meta.gene}_cov_per_cell.tsv
-  ls *_cov_per_cell.tsv | head -1 | xargs head -1 \\
-  > ${meta.id}_${meta.gene}_coverage_per_cell.tsv
-  cat *_cov_per_cell.tsv | grep -vP "^chr\\tpos" \\
-  >> ${meta.id}_${meta.gene}_coverage_per_cell.tsv
   """
 }
 
@@ -386,43 +210,6 @@ process genotype_mutations {
   """
 }
 
-// wrangle data for plots
-process wrangle_data {
-  tag "${meta.id}_${meta.gene}"
-  label 'normal20gb'
-  maxRetries 10
-  
-  input:
-  tuple val(meta),
-        path(cov),
-        path(celltypes),
-        path(cell_barcodes),
-        path(gene_bed), path(gene_features), path(exonic_bed),
-        path(geno_per_ct)
-  path(refcds)
-
-  output:
-  tuple val(meta), path("*.rds"), path(geno_per_ct),
-        emit: plot_data
-  tuple val(meta),
-        path("${meta.id}_${meta.gene}_coverage_per_exonic_position.tsv"),
-        emit: exonic_coverage
-
-  script:
-  """
-  wrangle_data.R \\
-    --gene ${meta.gene} \\
-    --gene_bed ${gene_bed} \\
-    --exonic_bed ${exonic_bed} \\
-    --refcds ${refcds} \\
-    --gene_features ${gene_features} \\
-    --cov ${cov} \\
-    --cell_barcodes ${cell_barcodes} \\
-    --celltypes ${celltypes} \\
-    --meta_run ${meta.id}
-  """
-}
-
 // plot coverage
 process plot_coverage {
   tag "${meta.id}_${meta.gene}"
@@ -432,7 +219,9 @@ process plot_coverage {
   errorStrategy 'ignore'
 
   input:
-  tuple val(meta), path(rdss), path(geno_per_ct)
+  tuple val(meta),
+        path(gene_bed), path(gene_regions), path(gene_features),
+        path(cov_per_ct), path(geno_per_ct)
   
   output:
   path("${meta.id}_${meta.gene}_*_plot.${params.plot_device}")
@@ -441,8 +230,12 @@ process plot_coverage {
   script:
   """
   plot_coverage.R \\
-    --meta_run ${meta.id} \\
+    --meta_id ${meta.id} \\
     --gene ${meta.gene} \\
+    --gene_bed ${gene_bed} \\
+    --gene_regions ${gene_regions} \\
+    --gene_features ${gene_features} \\
+    --cov_per_ct ${cov_per_ct} \\
     --geno_per_ct ${geno_per_ct} \\
     --min_cov ${params.min_cov} \\
     --plot_device ${params.plot_device}
@@ -532,28 +325,32 @@ workflow {
            gene_bed, gene_features, exonic_bed]
   }
   | subset_bam_to_genes
-  | subset_bam_to_barcodes
+  | set { ch_bam_x_gene }
 
-  // get coverage per cell
-  get_coverage_per_cell(subset_bam_to_barcodes.out)
+  // get coverage per cell or from bulk
+  single_cell(ch_bam_x_gene)
+  ch_cov_per_ct = single_cell.out.cov_per_ct
+  ch_cell_bams = single_cell.out.cell_bams
+  // if (params.bulk) {
+  //   bulk(ch_bam_x_gene)
+  //   ch_cov = bulk.out.cov
+  // } else {
+  //   single_cell(ch_bam_x_gene)
+  //   ch_cov = single_cell.out.cov
+  // }
 
   // genotype cells
-  genotype_mutations(get_coverage_per_cell.out.cell_bams)
-  
-  // prep data for plotting
-  wrangle_data(
-    get_coverage_per_cell.out.cov.join(genotype_mutations.out.geno_per_ct),
-    refcds)
+  genotype_mutations(ch_cell_bams)
 
   // plot coverage
-  plot_coverage(wrangle_data.out.plot_data)
+  plot_coverage(ch_cov_per_ct.join(genotype_mutations.out.geno_per_ct))
 
   // // plot coverage and mutations
-  // wrangle_data(get_coverage_per_cell.out.cov)
-  // plot_coverage(wrangle_data.out.plot_data)
+  // get_coverage_per_celltype(get_coverage_per_cell.out.cov)
+  // plot_coverage(get_coverage_per_celltype.out.plot_data)
 
   // // plot 5' drop-off per gene
-  // ch_exonic_cov_per_gene = wrangle_data.out.exonic_coverage.groupTuple()
+  // ch_exonic_cov_per_gene = get_coverage_per_celltype.out.exonic_coverage.groupTuple()
   // plot_5_prime_dropoff(ch_exonic_cov_per_gene)
   
 }
