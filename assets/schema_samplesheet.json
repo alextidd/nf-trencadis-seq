@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/nf-core/rnaseq/master/assets/schema_input.json",
+  "title": "nf-core/rnaseq pipeline - params.input schema",
+  "description": "Schema for the file provided with params.input",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^\\S+$",
+        "meta": ["id"],
+        "errorMessage": "Sample ID must be provided and cannot contain spaces"
+      },
+      "bam": {
+        "type": "string",
+        "pattern": "^\\S+am",
+        "format": "file-path",
+        "exists": true,
+        "errorMessage": "BAM file must be provided, cannot contain spaces and must have extension '.bam', '.sam', or '.cram'"
+      },
+      "mutations": {
+        "type": "string",
+        "pattern": "^\\S+\\.tsv",
+        "format": "file-path",
+        "exists": true,
+        "errorMessage": "Mutations file must exist, cannot contain spaces, and must have extension '.tsv'"
+      },
+      "celltypes": {
+        "type": "string",
+        "pattern": "^\\S+\\.csv",
+        "format": "file-path",
+        "exists": true,
+        "errorMessage": "Celltypes file must exist, cannot contain spaces, and must have extension '.csv'"
+      },
+      "cell_barcodes": {
+        "type": "string",
+        "pattern": "^\\S+\\.txt",
+        "format": "file-path",
+        "exists": true,
+        "errorMessage": "Cell barcodes file must exist, cannot contain spaces, and must have extension '.txt'"
+      }
+    },
+    "required": ["id", "bam", "mutations"]
+  }
+}

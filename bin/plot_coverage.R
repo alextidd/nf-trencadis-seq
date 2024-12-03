@@ -352,7 +352,7 @@ if (sum(geno_per_ct$alt_depth) > 0) {
       dplyr::right_join(geno_per_ct, gene_regions[["ccds"]]),
       facet_by_region = TRUE, facet_by_celltype = TRUE,
       muts_subtitle = "cCDS mutations genotyped")
-  p_muts_height <- 1.2
+  p_muts_height <- 1.5
 
   # plot mut pie, save
   p_mut_pie <- plot_mut_pie(cov_per_ct, geno_per_ct, g, p_subtitle)

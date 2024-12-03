@@ -98,6 +98,9 @@
     },
     "refcds": {
       "type": "string"
+    },
+    "no_chr": {
+      "type": "boolean"
     }
   },
   "required": ["samplesheet", "genes", "location", "gencode_gff3"]

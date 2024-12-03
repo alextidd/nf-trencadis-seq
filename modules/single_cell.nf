@@ -146,13 +146,45 @@ process get_coverage_per_celltype {
 
   script:
   """
-  get_coverage_per_celltype.R \\
+  single_cell_get_coverage_per_celltype.R \\
     --gene ${meta.gene} \\
     --regions ${gene_regions} \\
     --cov ${cov} \\
     --cell_barcodes ${cell_barcodes} \\
     --celltypes ${celltypes} \\
     --meta_id ${meta.id}
+  """
+}
+
+// genotype the mutations
+process genotype_mutations {
+  tag "${meta.id}_${meta.gene}"
+  label 'normal10gb'
+  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
+    mode: "copy"
+  
+  input:
+  tuple val(meta),
+        path(mutations), path(celltypes),
+        path(gene_bed),
+        path(cell_bams, stageAs: "cell_bams/*")
+  
+  output:
+  tuple val(meta),
+        path("genotyped_mutations_per_celltype.tsv"), emit: geno_per_ct
+  path("genotyped_mutations_per_cell.tsv"), emit: geno_per_cell
+  path("mutations.tsv"), emit: muts
+        
+  
+  script:
+  """
+  # genotype
+  single_cell_genotype_mutations.R \\
+    --gene_bed ${gene_bed} \\
+    --mutations ${mutations} \\
+    --celltypes ${celltypes} \\
+    --min_MQ ${params.min_MQ} \\
+    --min_BQ ${params.min_BQ}
   """
 }
 
@@ -170,6 +202,9 @@ workflow single_cell {
 
   // summarise coverage
   get_coverage_per_celltype(get_coverage_per_cell.out.cov)
+
+  // genotype mutations
+  genotype_mutations(get_coverage_per_cell.out.cell_bams)
   
   emit:
   cov_per_ct = get_coverage_per_celltype.out.cov_per_ct

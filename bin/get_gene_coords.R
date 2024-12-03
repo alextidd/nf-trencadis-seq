@@ -9,7 +9,8 @@ library(optparse)
 option_list <- list(
   make_option("--gene", type = "character"),
   make_option("--gencode_gff3", type = "character"),
-  make_option("--refcds", type = "character"))
+  make_option("--refcds", type = "character"),
+  make_option("--no_chr", type = "logical"))
 opts <- parse_args(OptionParser(option_list = option_list))
 saveRDS(opts, "opts.rds")
 # opts <- readRDS("opts.rds")
@@ -20,7 +21,8 @@ print("get ccds coords from refcds")
 load(opts$refcds)
 g <- RefCDS[[which(purrr::map_lgl(RefCDS, ~ .x$gene_name == opts$gene))]]
 ccds <-
-  tibble::tibble(chr = paste0("chr", g$chr), start = g$intervals_cds[, 1],
+  tibble::tibble(chr = ifelse(opts$no_chr, g$chr, paste0("chr", g$chr)),
+                 start = g$intervals_cds[, 1],
                  end = g$intervals_cds[, 2], type = "ccds")
 
 print("get feature coords from the gff")
@@ -93,7 +95,7 @@ regions[["exonic"]] <-
 
 print("get ccds regions")
 regions[["ccds"]] <-
-  tibble::tibble(chr = paste0("chr", g$chr),
+  tibble::tibble(chr = ifelse(opts$no_chr, g$chr, paste0("chr", g$chr)),
                  start = g$intervals_cds[, 1],
                  end = g$intervals_cds[, 2])  %>%
   dplyr::mutate(arr = dplyr::case_when(gene_bed$strand == "+" ~ start,

@@ -32,18 +32,12 @@ process irods {
         path(mutations), path(celltypes), path(cell_barcodes)
   
   output:
-  tuple val(meta), path("${meta.id}.bam"), path("${meta.id}.bam.bai"),
+  tuple val(meta), path("*.{bam,cram,sam}", arity: '1'),
         path(mutations), path(celltypes), path(cell_barcodes)
   
   script:
   """
-  iget -K ${bam} ${meta.id}.bam
-  if [[ `ils ${bam}.bai | wc -l` == 1 ]]
-  then
-      iget -K ${bam}.bai ${meta.id}.bam.bai
-  else
-      samtools index -@ ${task.cpus} ${meta.id}.bam
-  fi
+  iget -K ${bam} ${meta.id}.${meta.bam_ext}
   """
 }
 
@@ -59,18 +53,12 @@ process local {
         path(mutations), path(celltypes), path(cell_barcodes)
 
   output:
-  tuple val(meta), path("${meta.id}.bam"), path("${meta.id}.bam.bai"),
+  tuple val(meta), path("${meta.id}.${meta.bam_ext}"),
         path(mutations), path(celltypes), path(cell_barcodes)
 
   script:
   """
-  # create local symbolic link 
-  ln -s ${bam} ${meta.id}.bam
-  if [ -f "${bam}.bai" ] ; then
-      ln -s ${bam}.bai ${meta.id}.bam.bai
-  else
-      samtools index -@ ${task.cpus} ${meta.id}.bam
-  fi
+  ln -s ${bam} ${meta.id}.${meta.bam_ext}
   """
 }
 
@@ -78,20 +66,24 @@ process local {
 process check_bam {
   tag "${meta.id}"
   label 'normal'
-  errorStrategy 'ignore'
 
   input:
-  tuple val(meta), path(bam), path(bai),
+  tuple val(meta), path(bam),
         path(mutations), path(celltypes), path(cell_barcodes)
 
   output:
-  tuple val(meta), path(bam), path(bai),
+  tuple val(meta),
+        path(bam), path("${meta.id}.${meta.bam_ext}.${meta.bai_ext}"),
         path(mutations), path(celltypes), path(cell_barcodes)
 
   script:
   """
+  # modules
   module load samtools-1.19/python-3.12.0 
   samtools quickcheck ${bam}
+
+  # index
+  samtools index -@ ${task.cpus} ${bam}
   """
 }
 
@@ -116,11 +108,13 @@ process get_gene_coords {
   path "${gene}.bed", emit: gene_bed
 
   script:
+  def no_chr = params.no_chr ? "TRUE" : "FALSE"
   """
   get_gene_coords.R \\
     --gene ${gene} \\
     --gencode_gff3 ${gencode_gff3} \\
-    --refcds ${refcds}
+    --refcds ${refcds} \\
+    --no_chr ${no_chr}
   """
 }
 
@@ -168,38 +162,6 @@ process subset_bam_to_genes {
 
   # index
   samtools index -@ ${task.cpus} ${meta.id}_subset_genes.bam
-  """
-}
-
-// genotype the mutations
-process genotype_mutations {
-  tag "${meta.id}_${meta.gene}"
-  label 'normal10gb'
-  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
-    mode: "copy"
-  
-  input:
-  tuple val(meta),
-        path(mutations), path(celltypes),
-        path(gene_bed),
-        path(cell_bams, stageAs: "cell_bams/*")
-  
-  output:
-  tuple val(meta),
-        path("genotyped_mutations_per_celltype.tsv"), emit: geno_per_ct
-  path("genotyped_mutations_per_cell.tsv"), emit: geno_per_cell
-  path("mutations.tsv"), emit: muts
-        
-  
-  script:
-  """
-  # genotype
-  genotype_mutations.R \\
-    --gene_bed ${gene_bed} \\
-    --mutations ${mutations} \\
-    --celltypes ${celltypes} \\
-    --min_MQ ${params.min_MQ} \\
-    --min_BQ ${params.min_BQ}
   """
 }
 
@@ -270,25 +232,35 @@ workflow {
   // print summary of supplied parameters
   log.info paramsSummaryLog(workflow)
 
-  // get metadata + bam paths  
-  Channel.fromPath(params.samplesheet, checkIfExists: true)
-  | splitCsv(header: true)
-  | map { row ->
-      [[id: row.id],
-       file(row.bam, checkIfExists: true),
-       file(row.mutations, checkIfExists: true),
-       file(row.celltypes, checkIfExists: true),
-       file(row.cell_barcodes, checkIfExists: true)]
+  // get inputs
+  Channel
+  .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
+  | map { meta, bam, mutations, celltypes, cell_barcodes ->
+          bam_ext = bam.getName().substring(bam.getName().lastIndexOf('.') + 1)
+          bai_ext = bam_ext == "bam" ? "bai" : "crai"
+          [meta + [bam_ext: bam_ext, bai_ext: bai_ext],
+           bam, mutations, celltypes, cell_barcodes]
   }
   | set { input }
+  
+  // // get metadata + bam paths  
+  // Channel.fromPath(params.samplesheet, checkIfExists: true)
+  // | splitCsv(header: true)
+  // | map { row ->
+  //     [[id: row.id],
+  //      file(row.bam, checkIfExists: true),
+  //      file(row.mutations, checkIfExists: true),
+  //      file(row.celltypes, checkIfExists: true),
+  //      file(row.cell_barcodes, checkIfExists: true)]
+  // }
+  // | set { input }
   
   // download or locally link bams
   if (params.location == "irods") {
     // download input from irods
     ch_bam = irods(input)
-  }
-  else if (params.location == "local") {
-    // input are locally available
+  } else if (params.location == "local") {
+    // inputs are locally available
     ch_bam = local(input)
   }
 
@@ -296,10 +268,10 @@ workflow {
   ch_checked_bam = check_bam(ch_bam)
   
   // get gencode gff3
-  gencode_gff3 = file(params.gencode_gff3)
+  gencode_gff3 = file(params.gencode_gff3, checkIfExists: true)
 
   // get refcds
-  refcds = file(params.refcds)
+  refcds = file(params.refcds, checkIfExists: true)
 
   // get gene coords
   ch_gene = Channel.fromPath(params.genes).splitText().map{it -> it.trim()}

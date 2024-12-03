@@ -26,6 +26,7 @@ gene_pos <-
   dplyr::reframe(pos = start:end)
 mutations <-
   readr::read_tsv(opts$mutations) %>%
+  dplyr::distinct(chr, pos, ref, alt) %>%
   dplyr::inner_join(gene_pos) %>%
   dplyr::mutate(
     mut_id = paste(chr, pos, ref, alt, sep = "-"),
