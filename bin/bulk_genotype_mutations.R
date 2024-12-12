@@ -19,6 +19,7 @@ saveRDS(opts, "opts.rds")
 gene_pos <-
   readr::read_tsv(opts$gene_bed,
                   col_names = c("chr", "start", "end", "gene", "strand")) %>%
+  dplyr::mutate(chr = as.character(chr)) %>%
   dplyr::group_by(chr, gene) %>%
   dplyr::reframe(pos = start:end)
 mutations <-

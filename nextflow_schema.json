@@ -103,5 +103,5 @@
       "type": "boolean"
     }
   },
-  "required": ["samplesheet", "genes", "location", "gencode_gff3"]
+  "required": ["samplesheet", "location", "gencode_gff3"]
 }

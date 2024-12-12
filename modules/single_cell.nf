@@ -188,6 +188,38 @@ process genotype_mutations {
   """
 }
 
+// plot coverage
+process plot_coverage {
+  tag "${meta.id}_${meta.gene}"
+  label 'normal10gb'
+  maxRetries 10
+  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/", mode: "copy"
+  errorStrategy 'ignore'
+
+  input:
+  tuple val(meta),
+        path(gene_bed), path(gene_regions), path(gene_features),
+        path(cov_per_ct), path(geno_per_ct)
+  
+  output:
+  path("${meta.id}_${meta.gene}_*_plot.${params.plot_device}")
+  path("${meta.id}_${meta.gene}_pie_mutations_plot.rds"), optional: true
+
+  script:
+  """
+  plot_coverage.R \\
+    --meta_id ${meta.id} \\
+    --gene ${meta.gene} \\
+    --gene_bed ${gene_bed} \\
+    --gene_regions ${gene_regions} \\
+    --gene_features ${gene_features} \\
+    --cov_per_ct ${cov_per_ct} \\
+    --geno_per_ct ${geno_per_ct} \\
+    --min_cov ${params.min_cov} \\
+    --plot_device ${params.plot_device}
+  """
+}
+
 // workflow
 workflow single_cell {
   take:
@@ -205,6 +237,9 @@ workflow single_cell {
 
   // genotype mutations
   genotype_mutations(get_coverage_per_cell.out.cell_bams)
+
+  // plot coverage and mutations
+  plot_coverage(get_coverage_per_celltype.out.cov_per_ct.join(genotype_mutations.out.geno_per_ct))
   
   emit:
   cov_per_ct = get_coverage_per_celltype.out.cov_per_ct

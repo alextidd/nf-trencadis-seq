@@ -14,11 +14,7 @@ process get_coverage {
         path(gene_bed), path(gene_features), path(exonic_bed)
 
   output:
-  tuple val(meta), path(bam), path(bai),
-        path(mutations),
-        path("${meta.id}_${meta.gene}_coverage.tsv"),
-        path(celltypes), path(cell_barcodes),
-        path(gene_bed), path(gene_features), path(exonic_bed)
+  tuple val(meta), path("${meta.id}_${meta.gene}_coverage.tsv")
 
   script:
   """
@@ -48,15 +44,13 @@ process genotype_mutations {
   
   input:
   tuple val(meta), path(bam), path(bai),
-        path(mutations), path(cov),
+        path(mutations),
         path(celltypes), path(cell_barcodes),
         path(gene_bed), path(gene_features), path(exonic_bed)
   
   output:
-  tuple val(meta),
-        path("genotyped_mutations.tsv")
+  tuple val(meta), path("genotyped_mutations.tsv")
         
-  
   script:
   """
   # genotype
@@ -69,6 +63,62 @@ process genotype_mutations {
   """
 }
 
+// plot coverage
+process plot_coverage {
+  tag "${meta.gene}"
+  label 'normal10gb'
+  maxRetries 10
+  publishDir "${params.out_dir}/genes/${meta.gene}/", mode: "copy"
+
+  input:
+  tuple val(meta), val(ids), path(cov)
+  
+  output:
+  tuple val(meta), path("${meta.gene}_coverage.${params.plot_device}")
+  
+  script:
+  """
+  #!/usr/bin/env Rscript
+  
+  # libraries
+  library(magrittr)
+  library(ggplot2)
+
+  # get coverage data
+  files <- c("${cov.join('", "')}")
+  ids <- c("${ids.join('", "')}")
+  cov <-
+    purrr::map2(files, ids, function(file, id) {
+      readr::read_tsv(file) %>% dplyr::mutate(id = id)
+    }) %>%
+    dplyr::bind_rows() %>%
+    dplyr::group_by(id) %>%
+    dplyr::mutate(lab = paste0(id, "\\nmedian ", median(cov),
+                               " [", paste(range(cov), collapse = "-"), "]"))
+                   
+
+  # plot coverage
+  p <-
+    cov %>%
+    ggplot(aes(x = pos, y = cov)) +
+    geom_area() +
+    theme_classic() +
+    facet_grid(lab ~ .) +
+    scale_x_discrete(expand = c(0, 0)) +
+    scale_y_discrete(expand = c(0, 0)) +
+    theme(strip.text.y.right = element_text(angle = 0),
+          panel.spacing = unit(0, "lines"),
+          axis.text.y = element_blank(),
+          axis.title.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank()) +
+    ggtitle("${meta.gene} coverage")
+
+  ggsave("${meta.gene}_coverage.${params.plot_device}", p,
+    width = 10, height = 0.5 * dplyr::n_distinct(cov\$id), units = "in", dpi = 300)
+  """
+}
+
 // workflow
 workflow bulk {
   take:
@@ -76,7 +126,16 @@ workflow bulk {
 
   main:
   get_coverage(ch_bam_x_gene)
-  genotype_mutations(get_coverage.out)
+  genotype_mutations(ch_bam_x_gene)
+
+  // plot coverage and mutations
+  // ch_bam_x_gene.join(get_coverage.out).join(genotype_mutations.out).view()
+
+  // plot coverage per gene
+  get_coverage.out
+  | map { meta, cov -> [meta.subMap('gene'), meta.id, cov] }
+  | groupTuple()
+  | plot_coverage
   
   emit:
   get_coverage.out

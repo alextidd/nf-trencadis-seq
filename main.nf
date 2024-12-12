@@ -139,7 +139,7 @@ process collate_gene_coords {
 // subset the BAM to only reads in the genes
 process subset_bam_to_genes {
   tag "${meta.id}_${meta.gene}"
-  label 'normal'
+  label 'normal4core'
 
   input:
   tuple val(meta), path(bam), path(bai),
@@ -158,42 +158,11 @@ process subset_bam_to_genes {
   module load samtools-1.19/python-3.12.0 
 
   # subset to reads that fall in gene regions
-  samtools view -L ${gene_bed} -b ${bam} > ${meta.id}_subset_genes.bam
+  samtools view -@ ${task.cpus} -L ${gene_bed} -b ${bam} \\
+  > ${meta.id}_subset_genes.bam
 
   # index
   samtools index -@ ${task.cpus} ${meta.id}_subset_genes.bam
-  """
-}
-
-// plot coverage
-process plot_coverage {
-  tag "${meta.id}_${meta.gene}"
-  label 'normal10gb'
-  maxRetries 10
-  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/", mode: "copy"
-  errorStrategy 'ignore'
-
-  input:
-  tuple val(meta),
-        path(gene_bed), path(gene_regions), path(gene_features),
-        path(cov_per_ct), path(geno_per_ct)
-  
-  output:
-  path("${meta.id}_${meta.gene}_*_plot.${params.plot_device}")
-  path("${meta.id}_${meta.gene}_pie_mutations_plot.rds"), optional: true
-
-  script:
-  """
-  plot_coverage.R \\
-    --meta_id ${meta.id} \\
-    --gene ${meta.gene} \\
-    --gene_bed ${gene_bed} \\
-    --gene_regions ${gene_regions} \\
-    --gene_features ${gene_features} \\
-    --cov_per_ct ${cov_per_ct} \\
-    --geno_per_ct ${geno_per_ct} \\
-    --min_cov ${params.min_cov} \\
-    --plot_device ${params.plot_device}
   """
 }
 
@@ -236,24 +205,12 @@ workflow {
   Channel
   .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
   | map { meta, bam, mutations, celltypes, cell_barcodes ->
-          bam_ext = bam.getName().substring(bam.getName().lastIndexOf('.') + 1)
-          bai_ext = bam_ext == "bam" ? "bai" : "crai"
+          def bam_ext = bam.getName().substring(bam.getName().lastIndexOf('.') + 1)
+          def bai_ext = bam_ext == "bam" ? "bai" : "crai"
           [meta + [bam_ext: bam_ext, bai_ext: bai_ext],
-           bam, mutations, celltypes, cell_barcodes]
+            bam, mutations, celltypes, cell_barcodes]
   }
   | set { input }
-  
-  // // get metadata + bam paths  
-  // Channel.fromPath(params.samplesheet, checkIfExists: true)
-  // | splitCsv(header: true)
-  // | map { row ->
-  //     [[id: row.id],
-  //      file(row.bam, checkIfExists: true),
-  //      file(row.mutations, checkIfExists: true),
-  //      file(row.celltypes, checkIfExists: true),
-  //      file(row.cell_barcodes, checkIfExists: true)]
-  // }
-  // | set { input }
   
   // download or locally link bams
   if (params.location == "irods") {
@@ -306,11 +263,8 @@ workflow {
     ch_cov_per_ct = single_cell.out.cov_per_ct
     ch_cell_bams = single_cell.out.cell_bams
 
-    // genotype cells
-    genotype_mutations(ch_cell_bams)
-
-    // plot coverage
-    plot_coverage(ch_cov_per_ct.join(genotype_mutations.out.geno_per_ct))
+    // // plot coverage
+    // plot_coverage(ch_cov_per_ct.join(genotype_mutations.out.geno_per_ct))
 
   }
 
