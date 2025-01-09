@@ -1,9 +1,6 @@
 #!/usr/bin/env nextflow
-// TODO: add genotyping step to pipeline
 // TODO: simplify mutations + fix handling in plot_mut_pie()
-// TODO: ignore noncoding mutations!
 // TODO: fold Rmd reports into the nextflow pipeline
-// TODO: fix called mutation annotations to fit + facet by celltype
 // TODO: add gene expression distribution alongside mutations / coverage plots
 // TODO: create summary plot per gene
 // TODO: add celltype marker genes to the expression dotplot (ask Laura)
@@ -15,52 +12,12 @@ nextflow.enable.dsl=2
 // all of the default parameters are being set in `nextflow.config`
 
 // import functions / modules / subworkflows / workflows
+include { get_irods_bam  } from '../modules/get_irods_bam.nf'
+include { get_local_bam  } from '../modules/get_local_bam.nf'
+include { samtools_index } from '../modules/samtools_index.nf'
+include { MOSDEPTH       } from './modules/nf-core/mosdepth/main'
+include { single_cell    } from './modules/local/single_cell.nf'
 include { validateParameters; paramsHelp; paramsSummaryLog; samplesheetToList } from 'plugin/nf-schema'
-include { single_cell } from './modules/single_cell.nf'
-include { bulk        } from './modules/bulk.nf'
-
-// Download a given sample's BAM from iRODS
-// Then either retrieve the BAI or make one via indexing
-// The maxForks of 10 was set after asking jc18 about best iRODS practices
-process irods {
-  tag "${meta.id}"
-  maxForks 10
-  label 'normal4core'
-
-  input:
-  tuple val(meta), val(bam),
-        path(mutations), path(celltypes), path(cell_barcodes)
-  
-  output:
-  tuple val(meta), path("*.{bam,cram,sam}", arity: '1'),
-        path(mutations), path(celltypes), path(cell_barcodes)
-  
-  script:
-  """
-  iget -K ${bam} ${meta.id}.${meta.bam_ext}
-  """
-}
-
-// The equivalent of an irods download, but for a local copy of samplesheet
-// Symlink the BAM/BAI appropriately so they're named the right thing for downstream
-process local {
-  tag "${meta.id}"
-  maxForks 10
-  label 'normal4core'
-
-  input:
-  tuple val(meta), val(bam),
-        path(mutations), path(celltypes), path(cell_barcodes)
-
-  output:
-  tuple val(meta), path("${meta.id}.${meta.bam_ext}"),
-        path(mutations), path(celltypes), path(cell_barcodes)
-
-  script:
-  """
-  ln -s ${bam} ${meta.id}.${meta.bam_ext}
-  """
-}
 
 // check bam is not truncated before proceeding
 process check_bam {
@@ -201,28 +158,33 @@ workflow {
   // print summary of supplied parameters
   log.info paramsSummaryLog(workflow)
 
-  // get inputs
+  // get input bams
+  Channel
+    .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
+  | map { meta, bam, mutations, celltypes, cell_barcodes ->
+          [meta, bam]
+  }
+    | set { in_bam }
+
+  // get samplesheet
   Channel
   .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
   | map { meta, bam, mutations, celltypes, cell_barcodes ->
-          def bam_ext = bam.getName().substring(bam.getName().lastIndexOf('.') + 1)
-          def bai_ext = bam_ext == "bam" ? "bai" : "crai"
-          [meta + [bam_ext: bam_ext, bai_ext: bai_ext],
-            bam, mutations, celltypes, cell_barcodes]
+          [meta, mutations, celltypes, cell_barcodes]
   }
   | set { input }
   
   // download or locally link bams
   if (params.location == "irods") {
     // download input from irods
-    ch_bam = irods(input)
+    ch_bam = get_irods_bam(in_bam)
   } else if (params.location == "local") {
     // inputs are locally available
-    ch_bam = local(input)
+    ch_bam = get_local_bam(in_bam)
   }
 
-  // check bam is not truncated before proceeding
-  ch_checked_bam = check_bam(ch_bam)
+  // index bams
+  samtools_index(ch_bam)
   
   // get gencode gff3
   gencode_gff3 = file(params.gencode_gff3, checkIfExists: true)
@@ -239,35 +201,23 @@ workflow {
   | collate_gene_coords
 
   // combine gene-x-id, subset bams
-  ch_checked_bam.combine(get_gene_coords.out.gene_features)
+  samtools_index.out \
+  .join(input) \
+  .combine(get_gene_coords.out.gene_features)
   | map { meta, bam, bai, mutations, celltypes, cell_barcodes,
           gene, gene_bed, gene_features, exonic_bed ->
           [meta + [gene: gene],
-           bam, bai, mutations, celltypes, cell_barcodes, 
-           gene_bed, gene_features, exonic_bed]
+            bam, bai, mutations, celltypes, cell_barcodes, 
+            gene_bed, gene_features, exonic_bed]
   }
   | subset_bam_to_genes
   | set { ch_bam_x_gene }
 
-  // get coverage per cell or from bulk
+  // get coverage per celltype
+  single_cell(ch_bam_x_gene)
+  ch_cov_per_ct = single_cell.out.cov_per_ct
+  ch_cell_bams = single_cell.out.cell_bams
   
-  if (params.bulk) {
-
-    // get coverage
-    bulk(ch_bam_x_gene)
-
-  } else {
-
-    // get coverage per celltype
-    single_cell(ch_bam_x_gene)
-    ch_cov_per_ct = single_cell.out.cov_per_ct
-    ch_cell_bams = single_cell.out.cell_bams
-
-    // // plot coverage
-    // plot_coverage(ch_cov_per_ct.join(genotype_mutations.out.geno_per_ct))
-
-  }
-
   // // plot 5' drop-off per gene
   // ch_exonic_cov_per_gene = get_coverage_per_celltype.out.exonic_coverage.groupTuple()
   // plot_5_prime_dropoff(ch_exonic_cov_per_gene)
