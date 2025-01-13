@@ -17,7 +17,6 @@
         "type": "string",
         "pattern": "^\\S+am",
         "format": "file-path",
-        "exists": true,
         "errorMessage": "BAM file must be provided, cannot contain spaces and must have extension '.bam', '.sam', or '.cram'"
       },
       "mutations": {

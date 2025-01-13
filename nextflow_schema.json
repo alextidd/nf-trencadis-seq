@@ -81,7 +81,7 @@
       "type": "string",
       "default": "30d"
     },
-    "bulk": {
+    "no_celltypes": {
       "type": "boolean"
     },
     "refcds": {

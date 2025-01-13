@@ -19,28 +19,44 @@ include { MOSDEPTH       } from './modules/nf-core/mosdepth/main'
 include { single_cell    } from './modules/local/single_cell.nf'
 include { validateParameters; paramsHelp; paramsSummaryLog; samplesheetToList } from 'plugin/nf-schema'
 
-// check bam is not truncated before proceeding
-process check_bam {
+// optionally extract the cell barcodes from the BAM
+process get_cell_barcodes {
   tag "${meta.id}"
   label 'normal'
 
   input:
-  tuple val(meta), path(bam),
-        path(mutations), path(celltypes), path(cell_barcodes)
+  tuple val(meta), path(bam), path(bai)
 
   output:
-  tuple val(meta),
-        path(bam), path("${meta.id}.${meta.bam_ext}.${meta.bai_ext}"),
-        path(mutations), path(celltypes), path(cell_barcodes)
+  tuple val(meta), path(bam), path(bai), path("cell_barcodes.txt")
 
   script:
   """
-  # modules
-  module load samtools-1.19/python-3.12.0 
-  samtools quickcheck ${bam}
+  module load samtools-1.19/python-3.12.0
 
-  # index
-  samtools index -@ ${task.cpus} ${bam}
+  # get unique cell barcodes in the BAM, trim CB:Z: prefix
+  samtools view ${bam} | cut -f12- | tr "\\t" "\\n" |
+  grep "CB:Z:" | sed 's/^CB:Z://g' | awk '!x[\$0]++' \
+  > cell_barcodes.txt
+  """
+}
+
+// optionally generate pseudo celltypes file
+process fake_celltypes {
+  tag "${meta.id}"
+  label 'normal'
+
+  input:
+  tuple val(meta), path(bam), path(bai), path(cell_barcodes)
+
+  output:
+  tuple val(meta), path(bam), path(bai), path(cell_barcodes),
+        path("celltypes.csv")
+
+  script:
+  """
+  echo "barcode,celltype" > celltypes.csv
+  cat cell_barcodes.txt | awk '{print \$1",all"}' >> celltypes.csv
   """
 }
 
@@ -100,14 +116,14 @@ process subset_bam_to_genes {
 
   input:
   tuple val(meta), path(bam), path(bai),
-        path(mutations), path(celltypes), path(cell_barcodes),
+        path(cell_barcodes), path(celltypes), path(mutations),
         path(gene_bed), path(gene_regions), path(gene_features)
 
   output:
   tuple val(meta),
         path("${meta.id}_subset_genes.bam"),
         path("${meta.id}_subset_genes.bam.bai"),
-        path(mutations), path(celltypes), path(cell_barcodes),
+        path(cell_barcodes), path(celltypes), path(mutations),
         path(gene_bed), path(gene_regions), path(gene_features)
 
   script:
@@ -160,20 +176,36 @@ workflow {
 
   // get input bams
   Channel
-    .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
+  .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
   | map { meta, bam, mutations, celltypes, cell_barcodes ->
           [meta, bam]
   }
-    | set { in_bam }
+  | set { in_bam }
+
+  // get input cell_barcodes
+  Channel
+  .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
+  | map { meta, bam, mutations, celltypes, cell_barcodes ->
+          [meta, cell_barcodes]
+  }
+  | set { in_cell_barcodes }
+
+  // get input celltypes
+  Channel
+  .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
+  | map { meta, bam, mutations, celltypes, cell_barcodes ->
+          [meta, celltypes]
+  }
+  | set { in_celltypes }
 
   // get samplesheet
   Channel
   .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
   | map { meta, bam, mutations, celltypes, cell_barcodes ->
-          [meta, mutations, celltypes, cell_barcodes]
+          [meta, mutations]
   }
-  | set { input }
-  
+  | set { in_mutations }
+
   // download or locally link bams
   if (params.location == "irods") {
     // download input from irods
@@ -185,6 +217,20 @@ workflow {
 
   // index bams
   samtools_index(ch_bam)
+
+  // get cell barcodes if not provided
+  if ( params.no_cell_barcodes ) {
+    ch_barcodes = get_cell_barcodes(samtools_index.out)
+  } else {
+    ch_barcodes = samtools_index.out.join(in_cell_barcodes)
+  }
+
+  // generate pseudo celltypes if not provided ("all")
+  if ( params.no_celltypes ) {
+    ch_celltypes = fake_celltypes(ch_barcodes)
+  } else {
+    ch_celltypes = samtools_index.out.join(in_celltypes)
+  }
   
   // get gencode gff3
   gencode_gff3 = file(params.gencode_gff3, checkIfExists: true)
@@ -201,13 +247,13 @@ workflow {
   | collate_gene_coords
 
   // combine gene-x-id, subset bams
-  samtools_index.out \
-  .join(input) \
+  ch_celltypes \
+  .join(in_mutations) \
   .combine(get_gene_coords.out.gene_features)
-  | map { meta, bam, bai, mutations, celltypes, cell_barcodes,
+  | map { meta, bam, bai, cell_barcodes, celltypes, mutations,
           gene, gene_bed, gene_features, exonic_bed ->
           [meta + [gene: gene],
-            bam, bai, mutations, celltypes, cell_barcodes, 
+            bam, bai, cell_barcodes, celltypes, mutations, 
             gene_bed, gene_features, exonic_bed]
   }
   | subset_bam_to_genes
