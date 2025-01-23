@@ -229,7 +229,7 @@ workflow {
   if ( params.no_celltypes ) {
     ch_celltypes = fake_celltypes(ch_barcodes)
   } else {
-    ch_celltypes = samtools_index.out.join(in_celltypes)
+    ch_celltypes = ch_barcodes.join(in_celltypes)
   }
   
   // get gencode gff3

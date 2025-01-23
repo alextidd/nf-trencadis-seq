@@ -64,7 +64,7 @@ cov_per_ct <-
       dplyr::mutate(coverage = as.numeric(coverage),
                     n_cells = as.numeric(n_cells),
                     total_cells = length(CBs))
-    
+
     # return
     counts
 

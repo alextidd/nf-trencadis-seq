@@ -89,6 +89,9 @@
     },
     "no_chr": {
       "type": "boolean"
+    },
+    "no_cell_barcodes": {
+      "type": "boolean"
     }
   },
   "required": ["samplesheet", "location", "gencode_gff3"]
