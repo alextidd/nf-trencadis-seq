@@ -440,6 +440,7 @@ if (g$strand == "-") {
 
 # save plots
 purrr::walk2(names(p), p, function(lvl, p1) {
+  print(lvl)
   ggsave(
     paste0(opts$meta_id, "_", opts$gene, "_", lvl, "_cov_plot.",
            opts$plot_device),

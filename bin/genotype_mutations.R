@@ -26,6 +26,7 @@ gene_pos <-
   dplyr::reframe(pos = start:end)
 mutations <-
   readr::read_tsv(opts$mutations) %>%
+  dplyr::mutate(chr = as.character(chr)) %>%
   dplyr::distinct(chr, pos, ref, alt) %>%
   dplyr::inner_join(gene_pos) %>%
   dplyr::mutate(
@@ -41,7 +42,7 @@ if ("complex" %in% mutations$mut_type) {
   message(paste(mutations %>% dplyr::filter(mut_type == "complex") %>% nrow(),
                 "complex mutation(s) found and will be removed."))
   mutations <- mutations %>% dplyr::filter(mut_type != "complex")
-} 
+}
 
 if (nrow(mutations) > 0) {
 
@@ -57,7 +58,7 @@ if (nrow(mutations) > 0) {
       list.files("cell_bams/", pattern = ".bam$", full.names = TRUE) %>%
         {setNames(., tools::file_path_sans_ext(basename(.)))} %>%
         purrr::map(function(bam) {
-          
+
           cat(basename(bam), "\n")
 
           # query bam
