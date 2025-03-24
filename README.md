@@ -122,7 +122,7 @@ nextflow run nf-trencadis-seq \
 To get a full list of parameters, use the `--help` flag:
 
 ```bash
-$ nextflow run . --help
+$ nextflow run nf-trencadis-seq --help
 ```
 
 ## Parameters
