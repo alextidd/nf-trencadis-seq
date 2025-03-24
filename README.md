@@ -114,7 +114,7 @@ TP53
 Now, you can run the pipeline using:
 
 ```bash
-nextflow run ${wd}/../nextflow/nf-trencadis-seq \
+nextflow run nf-trencadis-seq \
   --samplesheet samplesheet.csv \
   --genes driver_genes.txt
 ```
