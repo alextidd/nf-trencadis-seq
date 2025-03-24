@@ -73,14 +73,15 @@
       "properties": {
         "refcds": {
           "type": "string",
-          "description": "Path to RefCDS Rda object from the dndscv package."
+          "description": "Path to a RefCDS Rda object from the dndscv package.",
+          "default": "${baseDir}/data/refcds/GRCh38/RefCDS_human_GRCh38_GencodeV18_recommended.rda"
         },
         "gencode_gff3": {
           "type": "string",
-          "description": "Path to a GENCODE GFF3 annotation file."
+          "description": "Path to a GENCODE GFF3 annotation file.",
+          "default": "${baseDir}/data/gencode_gff3/GRCh38/gencode.v39.annotation.gff3.gz"
         }
-      },
-      "required": ["refcds", "gencode_gff3"]
+      }
     },
     "generic_options": {
       "title": "Generic options",
