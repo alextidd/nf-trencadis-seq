@@ -21,7 +21,8 @@ genotype mutations in single cells with associated celltype information.
 
 ### Samplesheet
 
-First, prepare a comma-delimited samplesheet with your input data:
+First, prepare a comma-delimited samplesheet with your input data. It should 
+look like this:
 
 ```
 id,bam,cell_barcodes,celltypes,mutations
@@ -63,10 +64,10 @@ CTTAATCTGGGACGTA,T_cells
 AAACTGCTGAGATTGA,B_cell
 ```
 
-Make sure the barcodes in this file match those present in the BAM (check the
-`CB:Z` tag of the reads in the BAM to compare), and in the cellltypes file.
-10X BAMs will have a `-1` suffix on the barcodes, so if you are genotyping 10X
-BAMs, be sure to include this.
+Make sure the barcodes in this file match those present in the cellltypes file
+and in the BAM (check the `CB:Z` tag of the reads in the BAM to compare). 10X
+BAMs will have a `-1` suffix on the barcodes, so if you are analysing 10X BAMs,
+be sure to include this.
 
 **N.B.** If you do not have celltype annotations available, you can provide a
 samplesheet without the `celltypes` column and pass the parameter
@@ -87,8 +88,9 @@ ACATAGAGAGAAGTAT
 ```
 
 Before genotyping and coverage analyses, the pipeline will subset the BAM to 
-only those barcodes of interest. You can use this if you would like to only keep
-high-quality cells that passed QC or cells with annotations.
+only those barcodes of interest. You can use this if you would like to keep
+only high-quality cells that passed QC or only cells with annotations, for
+example.
 
 **N.B.** If you do not have cell barcodes of interest, you can provide a 
 samplesheet without the `cell_barcodes` column and pass the parameter
@@ -96,9 +98,9 @@ samplesheet without the `cell_barcodes` column and pass the parameter
 
 ### Genes
 
-The other main input file is the genes of interest. These are the genes in which
-you would like to assess coverage and genotype mutations across samples. The 
-genes file should be a text file and look like this:
+The other required input file is the genes of interest. These are the genes in
+which you would like to assess coverage and genotype mutations across samples.
+The genes file must be a text file with one gene per line, like this:
 
 ```
 DNMT3A
@@ -165,6 +167,7 @@ An example of an output directory, for the sample `PB_panel_AX001` and the gene
 
 ```
 .
+├── report.html
 ├── genes
 │   └── DNMT3A
 │       └── DNMT3A.bed
@@ -181,17 +184,18 @@ An example of an output directory, for the sample `PB_panel_AX001` and the gene
             └── *_plot.png
 ```
 
+- `report.html` - Summary of all plotting outputs.
 - `DNMT3A.bed` - Gene coordinates used by the pipeline.
-- `PB_panel_KX004_DNMT3A_subset.bam` - BAM of all reads overlapping the gene,
-subset to those in the cell barcodes file.
+- `PB_panel_KX004_DNMT3A_subset.bam` - BAM, subset to reads overlapping the
+gene and with barcodes present in the cell barcodes file.
 - `PB_panel_KX004_DNMT3A_coverage_per_cell.tsv` - Coverage per cell per site.
 - `PB_panel_KX004_DNMT3A_coverage_per_celltype.tsv` - Coverage per celltype per
 site.
-- `mutations.tsv` - All DNMT3A mutations that were genotyped.
+- `mutations.tsv` - All mutations in the gene that were genotyped.
 - `PB_panel_KX004_DNMT3A_genotyped_mutations_per_cell.tsv` - Reference and 
-alternative reads for each mutation per cell.
+alternative reads for each mutation in the gene per cell.
 - `PB_panel_KX004_DNMT3A_genotyped_mutations_per_celltype.tsv` - Reference and 
-alternative reads for each mutation per celltype.
+alternative reads for each mutation in the gene per celltype.
 - `*_plot.png` - Various plots of the genotyping and coverage information.
 
 ## License
