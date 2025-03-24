@@ -4,7 +4,84 @@
   "title": " pipeline parameters",
   "description": "",
   "type": "object",
-  "definitions": {
+  "$defs": {
+    "input_output_options": {
+      "title": "Input/output options",
+      "type": "object",
+      "description": "",
+      "default": "",
+      "properties": {
+        "samplesheet": {
+          "type": "string",
+          "description": "Comma-separated file containing the columns 'id', 'bam', 'celltypes', 'mutations', and 'cell_barcodes'."
+        },
+        "location": {
+          "type": "string",
+          "default": "local",
+          "description": "Are the BAMs saved locally or on iRODs?"
+        },
+        "out_dir": {
+          "type": "string",
+          "default": "out/",
+          "description": "Output directory."
+        },
+        "genes": {
+          "type": "string",
+          "description": "Text file of genes of interest, with one gene per line."
+        },
+        "plot_device": {
+          "type": "string",
+          "default": "png",
+          "enum": ["pdf", "png"],
+          "description": "File type for saving plots."
+        },
+        "min_cov": {
+          "type": "integer",
+          "default": 1,
+          "description": "Minimum coverage of a site in a cell for it to be genotyped."
+        },
+        "min_MQ": {
+          "type": "integer",
+          "default": 0,
+          "description": "Minimum mapping quality."
+        },
+        "min_BQ": {
+          "type": "integer",
+          "default": 0,
+          "description": "Minimum base quality."
+        },
+        "no_celltypes": {
+          "type": "boolean",
+          "description": "No celltype annotations in the samplesheet (`celltypes` column)."
+        },
+        "no_cell_barcodes": {
+          "type": "boolean",
+          "description": "No cell barcodes in the samplesheet (`cell_barcodes` column)."
+        },
+        "no_chr": {
+          "type": "boolean",
+          "description": "Is there a 'chr' prefix on the chromosome names?"
+        }
+      },
+      "required": ["samplesheet", "location"]
+    },
+    "reference_files": {
+      "title": "Reference files",
+      "type": "object",
+      "description": "",
+      "default": "",
+      "properties": {
+        "refcds": {
+          "type": "string",
+          "description": "Path to RefCDS Rda object from the dndscv package."
+        },
+        "gencode_gff3": {
+          "type": "string",
+          "description": "Path to a GENCODE GFF3 annotation file."
+        }
+      },
+      "required": ["refcds", "gencode_gff3"]
+    },
     "generic_options": {
       "title": "Generic options",
       "type": "object",
@@ -15,7 +92,21 @@
         "help": {
           "type": "boolean",
           "description": "Display help text.",
-          "fa_icon": "fas fa-question-circle",
+          "fa_icon": "fas fa-question-circle"
+        },
+        "max_memory": {
+          "type": "string",
+          "default": "2.9 TB",
+          "hidden": true
+        },
+        "max_cpus": {
+          "type": "integer",
+          "default": 256,
+          "hidden": true
+        },
+        "max_time": {
+          "type": "string",
+          "default": "30d",
           "hidden": true
         }
       }
@@ -23,76 +114,13 @@
   },
   "allOf": [
     {
-      "$ref": "#/definitions/generic_options"
+      "$ref": "#/$defs/input_output_options"
+    },
+    {
+      "$ref": "#/$defs/reference_files"
+    },
+    {
+      "$ref": "#/$defs/generic_options"
     }
-  ],
-  "properties": {
-    "samplesheet": {
-      "type": "string",
-      "description": "Comma-separated file containing the columns 'id', 'bam', 'celltypes', 'mutations', and 'cell_barcodes'."
-    },
-    "genes": {
-      "type": "string",
-      "description": "Text file of genes of interest, with one gene per line."
-    },
-    "location": {
-      "type": "string",
-      "default": "local",
-      "description": "Are the BAMs saved locally or on iRODs?"
-    },
-    "out_dir": {
-      "type": "string",
-      "default": "out/",
-      "description": "Output directory."
-    },
-    "gencode_gff3": {
-      "type": "string",
-      "description": "Path to a GENCODE GFF3 annotation file."
-    },
-    "min_cov": {
-      "type": "integer",
-      "default": 1,
-      "description": "Minimum coverage of a site in a cell."
-    },
-    "plot_device": {
-      "type": "string",
-      "default": "png",
-      "enum": ["pdf", "png"]
-    },
-    "min_MQ": {
-      "type": "integer",
-      "default": 0,
-      "description": "Minimum mapping quality."
-    },
-    "min_BQ": {
-      "type": "integer",
-      "default": 0,
-      "description": "Minimum base quality."
-    },
-    "max_memory": {
-      "type": "string",
-      "default": "2.9 TB"
-    },
-    "max_cpus": {
-      "type": "integer",
-      "default": 256
-    },
-    "max_time": {
-      "type": "string",
-      "default": "30d"
-    },
-    "no_celltypes": {
-      "type": "boolean"
-    },
-    "refcds": {
-      "type": "string"
-    },
-    "no_chr": {
-      "type": "boolean"
-    },
-    "no_cell_barcodes": {
-      "type": "boolean"
-    }
-  },
-  "required": ["samplesheet", "location", "gencode_gff3"]
+  ]
 }

@@ -36,7 +36,7 @@ mutations <-
                                 nchar(ref) > 1 & nchar(alt) == 1 ~ "del",
                                 TRUE ~ "complex"))
 
-# check for mutations that are not snv / ins / del                            
+# check for mutations that are not snv / ins / del
 if ("complex" %in% mutations$mut_type) {
   message("Complex mutations are not supported!")
   message(paste(mutations %>% dplyr::filter(mut_type == "complex") %>% nrow(),
@@ -64,12 +64,12 @@ if (nrow(mutations) > 0) {
           # query bam
           calls <- deepSNV::bam2R(bam, chr, pos, pos,
                                   q = opts$min_BQ, mq = opts$min_MQ)
-          
+
           # count all reads at site
           total_depth <- sum(calls[, c("A", "C", "G", "T", "a", "c", "g", "t",
                                        "DEL", "INS", "del", "ins")],
                              na.rm = TRUE)
-        
+
           # count ref reads at site
           # take first character (in case it is a deletion)
           ref_1 <- substr(ref, 1, 1)
@@ -83,7 +83,7 @@ if (nrow(mutations) > 0) {
             # count ins or del reads at site (don't check sequence)
             alt_depth <- sum(calls[, c(mut_type, toupper(mut_type))], na.rm = TRUE)
           }
-          
+
           tibble::tibble(chr = chr, pos = pos, ref = ref, alt = alt,
                          mut_id = mut_id, mut_type = mut_type, gene = gene,
                          total_depth = total_depth, ref_depth = ref_depth,

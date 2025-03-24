@@ -304,6 +304,7 @@ process genotype_mutations {
   label 'normal10gb'
   publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
     mode: "copy"
+  errorStrategy 'ignore'
   
   input:
   tuple val(meta),
@@ -331,7 +332,7 @@ process genotype_mutations {
 }
 
 // plot coverage
-process plot_coverage {
+process plot_coverage_and_genotyping {
   tag "${meta.id}_${meta.gene}"
   label 'normal10gb'
   maxRetries 10
@@ -351,7 +352,7 @@ process plot_coverage {
 
   script:
   """
-  plot_coverage.R \\
+  plot_coverage_and_genotyping.R \\
     --meta_id ${meta.id} \\
     --gene ${meta.gene} \\
     --gene_bed ${gene_bed} \\
@@ -364,26 +365,28 @@ process plot_coverage {
   """
 }
 
-// knit coverage plots
-process knit_coverage {
+// knit report on mutations and coverage
+process report {
   label 'normal'
   publishDir "${params.out_dir}/", mode: "copy"
 
   input:
-  tuple val(meta),
-        path(plots)
+  tuple val(x), val(ids), val(genes), path(plots)
+  path report_rmd
       
   output:
-  path("coverage_plots.html")
+  path("report.html")
 
   script:
-  def plots_vec = plots.collect{"'$it',"}.join(' ')
+  def c_ids = ids instanceof List ? 'c("' + ids.join('", "') + '")' : "c(\"${ids}\")"
+  def c_genes = 'c("' + genes.join('", "') + '")'
   """
   #!/usr/bin/env Rscript
   rmarkdown::render(
-    "knit_coverage.rmd",
-    output_file = "coverage_plots.html",
-    params = list(plots = ${plots_vec}))
+    "${report_rmd}",
+    output_file = "report.html",
+    params = list(ids = ${c_ids},
+                  genes = ${c_genes}))
   """
 }
 
@@ -521,16 +524,18 @@ workflow {
   genotype_mutations(get_coverage_per_cell.out.cell_bams)
 
   // plot coverage and mutations
-  plot_coverage(get_coverage_per_celltype.out.cov_per_ct.join(genotype_mutations.out.geno_per_ct))
+  plot_coverage_and_genotyping(get_coverage_per_celltype.out.cov_per_ct.join(genotype_mutations.out.geno_per_ct))
   
   // knit coverage plots
-  ch_plots = plot_coverage.out.plots.collect()
-  ch_plots.view()
-  knit_coverage(ch_plots)
-  
-  // knit coverage
-  // // plot 5' drop-off per gene
-  // ch_exonic_cov_per_gene = get_coverage_per_celltype.out.exonic_coverage.groupTuple()
-  // plot_5_prime_dropoff(ch_exonic_cov_per_gene)
+  report_rmd = file("${projectDir}/assets/report.Rmd", checkIfExists: true)
+  ch_plots = \
+    plot_coverage_and_genotyping.out.plots
+    | map { meta, plots -> [meta.id, meta.gene, plots] }
+    | groupTuple()
+    | map { ids, genes, plots -> ['report', ids, genes, plots]}
+    | map { x, ids, genes, plots_nested ->
+            def plots_flat = plots_nested.flatten()
+            return [x, ids, genes, plots_flat]}
+  report(ch_plots, report_rmd)
   
 }

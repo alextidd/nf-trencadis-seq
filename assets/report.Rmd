@@ -1,0 +1,81 @@
+---
+title: "Driver coverage and mutations"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+params:
+  ids: null
+  genes: null
+output:
+  html_document:
+    fig_width: 8
+    keep_md: false
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    toc_depth: 4
+    theme: lumen
+---
+
+```{r driv_cov, results = 'asis', echo = F}
+# libraries
+library(magrittr)
+
+# save params
+saveRDS(params, "params.rds")
+
+# header params
+knit_header <-
+  '```{r, echo = F, include = T, message = T, fig.align = "center", fig.pos = "H", out.width = "600px"}'
+
+# initialise chunks
+chunks <- c()
+
+# grab all pngs
+params$genes %>%
+  sort() %>%
+  purrr::walk(function(gene) {
+
+    # gene title
+    chunks <<- c(chunks, paste("\n##", gene))
+
+    # get runs
+    params$ids %>%
+      purrr::walk(function(id) {
+
+        chunks <<- c(chunks, paste("\n###", id))
+
+        # PB_panel_PD63118_ACTG1_ccds_cov_pct_plot.png
+        p_paths <-
+          expand.grid(id, gene,
+                      c("genic", "exonic", "ccds"), c("cov", "cov_pct"),
+                      "plot.png") %>%
+          dplyr::arrange(Var4, Var5) %>%
+          tidyr::unite("path", everything(), sep = "_", remove = FALSE)
+
+        for (p in p_paths$path) {
+
+          chunks <<- c(chunks, paste("\n####", basename(p)))
+
+          if (file.exists(p)) {
+
+            knit_plot <- c(
+              '', knit_header,
+              paste0('knitr::include_graphics("', p, '")'),
+              '```', '')
+            knitted_plot <-
+              knitr::knit_child(text = knit_plot, envir = environment(),
+                                quiet = TRUE)
+            chunks <<- c(chunks, knitted_plot)
+
+          } else {
+
+            chunks <<- c(chunks, paste("\nNo coverage plot found at", p))
+
+          }
+        }
+
+      })
+  })
+
+# return
+cat(unlist(chunks), sep = "\n")
+```
