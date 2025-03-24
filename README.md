@@ -155,6 +155,42 @@ BAM, the mutations file, the RefCDS, and the GENCODE GFF3.
 
 - `--help` [boolean]: Display help text.
 
+## Output
+
+An example of an output directory, for the sample `PB_panel_AX001` and the gene
+`DNMT3A`:
+
+```
+.
+├── genes
+│   └── DNMT3A
+│       └── DNMT3A.bed
+└── runs
+    └── PB_panel_KX004
+        └── DNMT3A
+            ├── PB_panel_KX004_DNMT3A_subset.bam.bai
+            ├── PB_panel_KX004_DNMT3A_subset.bam
+            ├── PB_panel_KX004_DNMT3A_coverage_per_cell.tsv
+            ├── PB_panel_KX004_DNMT3A_coverage_per_celltype.tsv
+            ├── mutations.tsv
+            ├── PB_panel_KX004_DNMT3A_genotyped_mutations_per_cell.tsv
+            ├── PB_panel_KX004_DNMT3A_genotyped_mutations_per_celltype.tsv
+            └── *_plot.png
+```
+
+- `DNMT3A.bed` - Gene coordinates used by the pipeline.
+- `PB_panel_KX004_DNMT3A_subset.bam` - BAM of all reads overlapping the gene,
+subset to those in the cell barcodes file.
+- `PB_panel_KX004_DNMT3A_coverage_per_cell.tsv` - Coverage per cell per site.
+- `PB_panel_KX004_DNMT3A_coverage_per_celltype.tsv` - Coverage per celltype per
+site.
+- `mutations.tsv` - All DNMT3A mutations that were genotyped.
+- `PB_panel_KX004_DNMT3A_genotyped_mutations_per_cell.tsv` - Reference and 
+alternative reads for each mutation per cell.
+- `PB_panel_KX004_DNMT3A_genotyped_mutations_per_celltype.tsv` - Reference and 
+alternative reads for each mutation per celltype.
+- `*_plot.png` - Various plots of the genotyping and coverage information.
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

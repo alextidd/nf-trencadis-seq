@@ -91,6 +91,7 @@ exonic_cov <-
   dplyr::mutate(total_cells = total_cells_all_cts)
 
 # save
-cov_per_ct %>% saveRDS(paste0(opts$meta_id, "_", opts$gene, "_cov_per_ct.rds"))
+cov_per_ct %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
+                                       "_coverage_per_celltype.tsv"))
 exonic_cov %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
                                        "_coverage_per_exonic_position.tsv"))

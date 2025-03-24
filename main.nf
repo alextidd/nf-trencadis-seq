@@ -155,7 +155,8 @@ process subset_bam_to_barcodes {
 
   output:
   tuple val(meta),
-        path("${meta.id}_subset.bam"), path("${meta.id}_subset.bam.bai"),
+        path("${meta.id}_${meta.gene}_subset.bam"),
+        path("${meta.id}_${meta.gene}_subset.bam.bai"),
         path(cell_barcodes), path(celltypes), path(mutations),
         path(gene_bed), path(gene_regions), path(gene_features)
 
@@ -167,10 +168,10 @@ process subset_bam_to_barcodes {
   subset-bam \
     -b ${bam} \
     --cell-barcodes ${cell_barcodes} \
-    --out-bam ${meta.id}_subset.bam
+    --out-bam ${meta.id}_${meta.gene}_subset.bam
   
   # index
-  samtools index -@ ${task.cpus} ${meta.id}_subset.bam
+  samtools index -@ ${task.cpus} ${meta.id}_${meta.gene}_subset.bam
   """
 }
 
@@ -269,6 +270,9 @@ process get_coverage_per_cell {
 process get_coverage_per_celltype {
   tag "${meta.id}_${meta.gene}"
   label 'long20gb'
+  publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
+    mode: "copy",
+    pattern: "*_coverage_per_celltype.tsv"
   maxRetries 10
   
   input:
@@ -280,7 +284,7 @@ process get_coverage_per_celltype {
   output:
   tuple val(meta),
         path(gene_bed), path(gene_regions), path(gene_features),
-        path("${meta.id}_${meta.gene}_cov_per_ct.rds"),
+        path("${meta.id}_${meta.gene}_coverage_per_celltype.tsv"),
         emit: cov_per_ct
   tuple val(meta),
         path("${meta.id}_${meta.gene}_coverage_per_exonic_position.tsv"),
@@ -314,15 +318,16 @@ process genotype_mutations {
   
   output:
   tuple val(meta),
-        path("genotyped_mutations_per_celltype.tsv"), emit: geno_per_ct
-  path("genotyped_mutations_per_cell.tsv"), emit: geno_per_cell
+        path("${meta.id}_${meta.gene}_genotyped_mutations_per_celltype.tsv"), emit: geno_per_ct
+  path("${meta.id}_${meta.gene}_genotyped_mutations_per_cell.tsv"), emit: geno_per_cell
   path("mutations.tsv"), emit: muts
         
-  
   script:
   """
   # genotype
   genotype_mutations.R \\
+    --id ${meta.id} \\
+    --gene ${meta.gene} \\
     --gene_bed ${gene_bed} \\
     --mutations ${mutations} \\
     --celltypes ${celltypes} \\

@@ -6,6 +6,7 @@ library(optparse)
 
 # parse arguments
 option_list <- list(
+  make_option("--id", type = "character"),
   make_option("--gene_bed", type = "character"),
   make_option("--mutations", type = "character"),
   make_option("--celltypes", type = "character"),
@@ -116,5 +117,9 @@ if (nrow(mutations) > 0) {
 
 # write
 mutations %>% readr::write_tsv("mutations.tsv")
-geno %>% readr::write_tsv("genotyped_mutations_per_cell.tsv")
-geno_by_celltype %>% readr::write_tsv("genotyped_mutations_per_celltype.tsv")
+geno %>%
+  readr::write_tsv(paste(opts$id, opts$gene,
+                         "genotyped_mutations_per_cell.tsv", sep = "_"))
+geno_by_celltype %>%
+  readr::write_tsv(paste(opts$id, opts$gene,
+                         "genotyped_mutations_per_celltype.tsv", sep = "_"))
