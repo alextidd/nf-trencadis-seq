@@ -15,6 +15,10 @@
           "type": "string",
           "description": "Comma-separated file containing the columns 'id', 'bam', 'celltypes', 'mutations', and 'cell_barcodes'."
         },
+        "genes": {
+          "type": "string",
+          "description": "Text file of genes of interest, with one gene per line."
+        },
         "location": {
           "type": "string",
           "default": "local",
@@ -24,10 +28,6 @@
           "type": "string",
           "default": "out/",
           "description": "Output directory."
-        },
-        "genes": {
-          "type": "string",
-          "description": "Text file of genes of interest, with one gene per line."
         },
         "plot_device": {
           "type": "string",
@@ -63,7 +63,7 @@
           "description": "Is there a 'chr' prefix on the chromosome names?"
         }
       },
-      "required": ["samplesheet", "location"]
+      "required": ["samplesheet", "genes"]
     },
     "reference_files": {
       "title": "Reference files",

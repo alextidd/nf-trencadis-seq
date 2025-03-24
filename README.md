@@ -126,12 +126,15 @@ $ nextflow run . --help
 
 ## Parameters
 
-### Input/output options
+### Required options
 
 - `--samplesheet` [string]: Comma-separated file containing the columns 'id', 'bam', 'celltypes', 'mutations', and 'cell_barcodes'.
+- `--genes` [string]: Text file of genes of interest, with one gene per line.
+
+### Input/output options
+
 - `--location` [string]: Are the BAMs saved locally or on iRODs? [default: local]
 - `--out_dir` [string]: Output directory. [default: out/]
-- `--genes` [string]: Text file of genes of interest, with one gene per line.
 - `--plot_device` [string]: File type for saving plots. (accepted: pdf, png) [default: png]
 - `--min_cov` [integer]: Minimum coverage of a site in a cell for it to be genotyped. [default: 1]
 - `--min_MQ` [integer]: Minimum mapping quality. [default: 0]
@@ -141,7 +144,7 @@ $ nextflow run . --help
 
 ### Reference files
 
-- `--no_chr` [boolean]: Is there a 'chr' prefix on the chromosome names?
+- `--no_chr` [boolean]: Is there a 'chr' prefix on the chromosome names? [default: false]
 - `--refcds` [string]: Path to RefCDS Rda object from the dndscv package. [default: ${baseDir}/data/refcds/GRCh38/RefCDS_human_GRCh38_GencodeV18_recommended.rda] 
 - `--gencode_gff3` [string]: Path to a GENCODE GFF3 annotation file. [default: ${baseDir}/data/gencode_gff3/GRCh38/gencode.v39.annotation.gff3.gz] 
 
