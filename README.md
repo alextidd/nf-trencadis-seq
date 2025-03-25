@@ -161,7 +161,7 @@ BAM, the mutations file, the RefCDS, and the GENCODE GFF3.
 
 ## Output
 
-An example of an output directory, for the sample `PB_panel_AX001` and the gene
+An example of an output directory, for the sample `PB_panel_KX004` and the gene
 `DNMT3A`:
 
 ```
