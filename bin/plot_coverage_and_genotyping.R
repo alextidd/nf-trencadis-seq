@@ -309,7 +309,7 @@ p_subtitle <- paste0(opts$meta_id, " ", opts$gene, " (", g$strand, " strand, ",
                                scientific = FALSE),
                      "bp, min coverage = ", opts$min_cov, ")")
 
-# plot mutations from Mitchell 2022
+# plot mutations
 if (nrow(geno_per_ct) > 0) {
   p[["genic"]][["wgs_mutations"]] <-
     plot_mutations(
@@ -333,10 +333,10 @@ if (nrow(geno_per_ct) > 0) {
   p_wgs_muts_height <- 0.01
 }
 
-# plot mutations from PB panel
+# plot genotyped mutations
 if (sum(geno_per_ct$alt_depth) > 0) {
 
-  # plot mutations
+  # plot genotyped mutations
   p[["genic"]][["mutations"]] <-
     plot_genotyped_mutations(
       dplyr::right_join(geno_per_ct, gene_regions[["genic"]]),

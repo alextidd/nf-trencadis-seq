@@ -272,7 +272,7 @@ process get_coverage_per_celltype {
   label 'long20gb'
   publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
     mode: "copy",
-    pattern: "*_coverage_per_celltype.tsv"
+    pattern: "*_coverage_per_*.tsv"
   maxRetries 10
   
   input:
@@ -289,6 +289,7 @@ process get_coverage_per_celltype {
   tuple val(meta),
         path("${meta.id}_${meta.gene}_coverage_per_exonic_position.tsv"),
         emit: exonic_coverage
+  path("${meta.id}_${meta.gene}_coverage_per_ccds_position.tsv")
 
   script:
   """
