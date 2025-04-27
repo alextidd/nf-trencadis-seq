@@ -1,3 +1,2 @@
 .nextflow.log*
 .nextflow/
-modules/nf-core/
