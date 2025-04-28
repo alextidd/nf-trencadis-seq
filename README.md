@@ -150,7 +150,8 @@ $ nextflow run nf-trencadis-seq --help
 - `--gencode_gff3` [string]: Path to a GENCODE GFF3 annotation file. [default: ${baseDir}/data/gencode_gff3/GRCh38/gencode.v39.annotation.gff3.gz] 
 
 If you wish to run the pipeline using a different genome build, you will have 
-to change these. 
+to change these. Alternative RefCDS Rda objects can be downloaded 
+[here](https://github.com/im3sanger/dndscv_data/tree/master/data).
 
 **N.B.** Make sure the contig names (e.g. chr1 vs 1) are consistent across the
 BAM, the mutations file, the RefCDS, and the GENCODE GFF3.

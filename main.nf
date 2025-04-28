@@ -1,10 +1,4 @@
 #!/usr/bin/env nextflow
-// TODO: simplify mutations + fix handling in plot_mut_pie()
-// TODO: fold Rmd reports into the nextflow pipeline
-// TODO: add gene expression distribution alongside mutations / coverage plots
-// TODO: create summary plot per gene
-// TODO: add celltype marker genes to the expression dotplot (ask Laura)
-// TODO: check over the transcript IDs that Carol from pipeline sent - begin deconvolution in the dataset
 
 // using DSL-2
 nextflow.enable.dsl=2
