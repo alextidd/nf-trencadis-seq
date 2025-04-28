@@ -139,7 +139,6 @@ process subset_bam_to_barcodes {
   publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
     mode: "copy",
     pattern: "*_subset.{bam,bam.bai}"
-  errorStrategy 'ignore'
 
   input:
   tuple val(meta),
@@ -303,7 +302,6 @@ process genotype_mutations {
   label 'normal10gb'
   publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
     mode: "copy"
-  errorStrategy 'ignore'
   
   input:
   tuple val(meta),

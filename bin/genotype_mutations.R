@@ -7,6 +7,7 @@ library(optparse)
 # parse arguments
 option_list <- list(
   make_option("--id", type = "character"),
+  make_option("--gene", type = "character"),
   make_option("--gene_bed", type = "character"),
   make_option("--mutations", type = "character"),
   make_option("--celltypes", type = "character"),
