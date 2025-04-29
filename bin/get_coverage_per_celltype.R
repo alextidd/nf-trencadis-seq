@@ -95,8 +95,7 @@ ccds_cov <-
   cov_per_ct %>%
   dplyr::inner_join(regions[["ccds"]]) %>%
   # get number of cells per coverage per position
-  dplyr::group_by(chr, pos, gene, region, ccds_distance_from_5_prime,
-                  coverage) %>%
+  dplyr::group_by(chr, pos, gene, region, coverage) %>%
   dplyr::summarise(n_cells = sum(n_cells)) %>%
   dplyr::ungroup() %>%
   dplyr::mutate(total_cells = total_cells_all_cts)
@@ -107,4 +106,4 @@ cov_per_ct %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
 exonic_cov %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
                                        "_coverage_per_exonic_position.tsv"))
 ccds_cov %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
-                                       "_coverage_per_ccds_position.tsv"))
+                                     "_coverage_per_ccds_position.tsv"))

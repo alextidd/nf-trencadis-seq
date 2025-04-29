@@ -175,7 +175,6 @@ process get_coverage_per_cell {
   publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
     mode: "copy",
     pattern: "*_coverage_per_cell.tsv"
-  errorStrategy 'ignore'
 
   input:
   tuple val(meta), path(bam), path(bai),
@@ -196,7 +195,7 @@ process get_coverage_per_cell {
   """
   module load samtools-1.19/python-3.12.0
 
-  # get gene info
+  echo "getting gene info"
   chr=\$(cut -f1 ${gene_bed})
   start=\$(cut -f2 ${gene_bed})
   end=\$(cut -f3 ${gene_bed})
@@ -222,7 +221,7 @@ process get_coverage_per_cell {
     rm \$CB.txt
   done < cell_barcodes.txt
 
-  # initialise gene coverage file
+  echo "initialising gene coverage file"
   rm -rf ${meta.gene} ; mkdir ${meta.gene}
   touch ${meta.gene}_cov.tsv
 
