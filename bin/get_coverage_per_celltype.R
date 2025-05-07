@@ -73,6 +73,10 @@ cov_per_ct <-
   dplyr::mutate(celltype_label = paste0(celltype, " (", total_cells, ")") %>%
                   forcats::fct_reorder(total_cells, .desc = TRUE))
 
+# save coverage
+cov_per_ct %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
+                                       "_coverage_per_celltype.tsv"))
+
 # get total n cells (across celltypes)
 total_cells_all_cts <-
   cov_per_ct %>%
@@ -100,9 +104,7 @@ ccds_cov <-
   dplyr::ungroup() %>%
   dplyr::mutate(total_cells = total_cells_all_cts)
 
-# save
-cov_per_ct %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
-                                       "_coverage_per_celltype.tsv"))
+# save subsetted coverage
 exonic_cov %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
                                        "_coverage_per_exonic_position.tsv"))
 ccds_cov %>% readr::write_tsv(paste0(opts$meta_id, "_", opts$gene,
