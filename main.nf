@@ -34,7 +34,7 @@ process get_cell_barcodes {
   """
 }
 
-// optionally generate pseudo celltypes file
+// optionally generate pseudo-celltypes file
 process fake_celltypes {
   tag "${meta.id}"
   label 'normal'
