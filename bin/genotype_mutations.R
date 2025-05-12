@@ -117,10 +117,15 @@ if (nrow(mutations) > 0) {
 }
 
 # write
-mutations %>% readr::write_tsv("mutations.tsv")
+mutations %>%
+  readr::write_tsv(paste(opts$id, opts$gene,
+                         "mutations.tsv", sep = "_"))
 geno %>%
   readr::write_tsv(paste(opts$id, opts$gene,
                          "genotyped_mutations_per_cell.tsv", sep = "_"))
 geno_by_celltype %>%
   readr::write_tsv(paste(opts$id, opts$gene,
                          "genotyped_mutations_per_celltype.tsv", sep = "_"))
+geno_by_celltype %>% saveRDS(paste(opts$id, opts$gene,
+                                   "genotyped_mutations_per_celltype.rds",
+                                   sep = "_"))

@@ -24,13 +24,10 @@ print(opts)
 
 # read in genotyped mutations (must explicitly set col_types because ref/alt 
 # values of T will be interpreted as boolean column of TRUE)
-geno_per_ct <-
-  readr::read_tsv(opts$geno_per_ct,
-                  col_types = readr::cols(ref = readr::col_character(),
-                                          alt = readr::col_character()))
+geno_per_ct <- readRDS(opts$geno_per_ct)
 
 # read coverage data
-cov_per_ct <- readRDS(opts$cov_per_ct)
+cov_per_ct <- readr::read_tsv(opts$cov_per_ct)
 
 # read gene data
 g <- readr::read_tsv(opts$gene_bed,

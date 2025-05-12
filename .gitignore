@@ -1,2 +1,5 @@
 .nextflow.log*
 .nextflow/
+test/log/
+test/out/
+work/

@@ -102,8 +102,8 @@ process collate_gene_coords {
   """
 }
 
-// subset the BAM to only reads in the genes
-process subset_bam_to_genes {
+// subset the BAM to only reads in the gene
+process subset_bam_to_gene {
   tag "${meta.id}_${meta.gene}"
   label 'normal4core'
 
@@ -121,7 +121,7 @@ process subset_bam_to_genes {
 
   script:
   """
-  module load samtools-1.19/python-3.12.0 
+  module load samtools-1.19/python-3.12.0
 
   # subset to reads that fall in gene regions
   samtools view -@ ${task.cpus} -L ${gene_bed} -b ${bam} \\
@@ -129,6 +129,14 @@ process subset_bam_to_genes {
 
   # index
   samtools index -@ ${task.cpus} ${meta.id}_subset_genes.bam
+
+  # check if any reads
+  n_reads=\$(samtools view -c ${meta.id}_subset_genes.bam)
+  if [[ \$n_reads -eq 0 ]]; then
+    echo "No reads for ${meta.id} ${meta.gene}, skipping"
+    rm ${meta.id}_subset_genes.bam ${meta.id}_subset_genes.bam.bai
+    exit 42  # special exit code to indicate skip
+  fi
   """
 }
 
@@ -300,7 +308,7 @@ process genotype_mutations {
   tag "${meta.id}_${meta.gene}"
   label 'normal10gb'
   publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/",
-    mode: "copy"
+    mode: "copy", pattern: "*.tsv"
   
   input:
   tuple val(meta),
@@ -310,9 +318,10 @@ process genotype_mutations {
   
   output:
   tuple val(meta),
-        path("${meta.id}_${meta.gene}_genotyped_mutations_per_celltype.tsv"), emit: geno_per_ct
+        path("${meta.id}_${meta.gene}_genotyped_mutations_per_celltype.rds"), emit: geno_per_ct
+  path("${meta.id}_${meta.gene}_genotyped_mutations_per_celltype.tsv"), emit: geno_per_ct_tsv
   path("${meta.id}_${meta.gene}_genotyped_mutations_per_cell.tsv"), emit: geno_per_cell
-  path("mutations.tsv"), emit: muts
+  path("${meta.id}_${meta.gene}_mutations.tsv"), emit: muts
         
   script:
   """
@@ -334,7 +343,6 @@ process plot_coverage_and_genotyping {
   label 'normal10gb'
   maxRetries 10
   publishDir "${params.out_dir}/runs/${meta.id}/${meta.gene}/", mode: "copy"
-  errorStrategy 'ignore'
 
   input:
   tuple val(meta),
@@ -435,24 +443,24 @@ workflow {
   in_cell_barcodes = \
     Channel
     .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
-    | map { meta, bam, mutations, celltypes, cell_barcodes ->
-            [meta, cell_barcodes]
+    | map { meta, _bam, _mutations, _celltypes, cell_barcodes ->
+            [meta, file(cell_barcodes)]
     }
 
   // get input celltypes
   in_celltypes = \
     Channel
     .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
-    | map { meta, bam, mutations, celltypes, cell_barcodes ->
-            [meta, celltypes]
+    | map { meta, _bam, _mutations, celltypes, _cell_barcodes ->
+            [meta, file(celltypes)]
     }
 
   // get samplesheet
   in_mutations = \
     Channel
     .fromList(samplesheetToList(params.samplesheet, "assets/schema_samplesheet.json"))
-    | map { meta, bam, mutations, celltypes, cell_barcodes ->
-            [meta, mutations]
+    | map { meta, _bam, mutations, _celltypes, _cell_barcodes ->
+            [meta, file(mutations)]
     }
 
   // download or locally link bams
@@ -506,7 +514,7 @@ workflow {
               bam, bai, cell_barcodes, celltypes, mutations, 
               gene_bed, gene_features, exonic_bed]
     }
-    | subset_bam_to_genes
+    | subset_bam_to_gene
 
   // get per-cell bams
   subset_bam_to_barcodes(ch_bam_x_gene)
