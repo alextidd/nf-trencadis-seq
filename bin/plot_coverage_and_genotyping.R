@@ -243,6 +243,7 @@ plot_mut_pie <- function(cov_per_ct, geno_per_ct, g, p_title) {
     ggplot(aes(x = mut_ref_n, y = celltype_n)) +
     geom_tile(aes(colour = `variant detected?`), fill = NA, linewidth = 1) +
     scatterpie::geom_scatterpie(
+      data = mut_sites,
       aes(x = mut_ref_n, y = celltype_n, r = radius),
       cols = c("ref_depth", "alt_depth"),
       legend_name = "depth", na.rm = TRUE, colour = NA) +
