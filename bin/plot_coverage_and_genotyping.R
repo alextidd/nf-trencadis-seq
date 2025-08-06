@@ -333,22 +333,23 @@ if (nrow(geno_per_ct) > 0) {
 # plot genotyped mutations
 if (sum(geno_per_ct$alt_depth) > 0) {
 
+  # gene regions x celltypes
+  gene_regions_per_ct <-
+    gene_regions %>%
+    purrr::map(function(x) {
+      tibble::tibble(celltype = unique(geno_per_ct$celltype)) %>%
+        tidyr::crossing(x)
+    })
+
   # plot genotyped mutations
-  p[["genic"]][["mutations"]] <-
-    plot_genotyped_mutations(
-      dplyr::right_join(geno_per_ct, gene_regions[["genic"]]),
-      facet_by_celltype = TRUE,
-      muts_subtitle = "mutations genotyped")
-  p[["exonic"]][["mutations"]] <-
-    plot_genotyped_mutations(
-      dplyr::right_join(geno_per_ct, gene_regions[["exonic"]]),
-      facet_by_region = TRUE, facet_by_celltype = TRUE,
-      muts_subtitle = "exonic mutations genotyped")
-  p[["ccds"]][["mutations"]] <-
-    plot_genotyped_mutations(
-      dplyr::right_join(geno_per_ct, gene_regions[["ccds"]]),
-      facet_by_region = TRUE, facet_by_celltype = TRUE,
-      muts_subtitle = "cCDS mutations genotyped")
+  c("genic", "exonic", "ccds") %>%
+    purrr::walk(function(region) {
+      p[[region]][["mutations"]] <<-
+        plot_genotyped_mutations(
+          dplyr::right_join(geno_per_ct, gene_regions_per_ct[[region]]),
+          facet_by_region = region != "genic", facet_by_celltype = TRUE,
+          muts_subtitle = paste(region, "mutations genotyped"))
+    })
   p_muts_height <- 1.5
 
   # plot mut pie, save
@@ -361,31 +362,27 @@ if (sum(geno_per_ct$alt_depth) > 0) {
     p_mut_pie, dpi = 500)
 
 } else {
-  p[["genic"]][["mutations"]] <- ggplot() + theme_void()
-  p[["exonic"]][["mutations"]] <- ggplot() + theme_void()
-  p[["ccds"]][["mutations"]] <- ggplot() + theme_void()
+  c("genic", "exonic", "ccds") %>%
+    purrr::walk(function(region) {
+      p[[region]][["mutations"]] <<- ggplot() + theme_void()
+    })
   p_muts_height <- 0.01
 }
 
 # plot transcripts
 p[["genic"]][["transcripts"]] <- plot_transcripts(gene_features)
-p[["exonic"]][["transcripts"]] <-
-  gene_features %>%
-  dplyr::group_by(dplyr::across(-c(start, end))) %>%
-  dplyr::reframe(pos = start:end) %>%
-  dplyr::right_join(gene_regions[["exonic"]] %>%
-                      dplyr::select(chr, region, pos)) %>%
-  dplyr::group_by(dplyr::across(-c(pos))) %>%
-  dplyr::summarise(start = min(pos), end = max(pos)) %>%
-  plot_transcripts(facet_by_region = TRUE)
-p[["ccds"]][["transcripts"]] <-
-  gene_features %>%
-  dplyr::group_by(dplyr::across(-c(start, end))) %>%
-  dplyr::reframe(pos = start:end) %>%
-  dplyr::right_join(gene_regions[["ccds"]]) %>%
-  dplyr::group_by(dplyr::across(-c(pos))) %>%
-  dplyr::summarise(start = min(pos), end = max(pos)) %>%
-  plot_transcripts(facet_by_region = TRUE)
+c("exonic", "ccds") %>%
+  purrr::walk(function(region) {
+    p[[region]][["transcripts"]] <<-
+      gene_features %>%
+      dplyr::group_by(dplyr::across(-c(start, end))) %>%
+      dplyr::reframe(pos = start:end) %>%
+      dplyr::right_join(gene_regions[[region]] %>%
+                          dplyr::select(chr, region, pos)) %>%
+      dplyr::group_by(dplyr::across(-c(pos))) %>%
+      dplyr::summarise(start = min(pos), end = max(pos)) %>%
+      plot_transcripts(facet_by_region = TRUE)
+  })
 
 # plot coverage, n cells
 p[["genic"]][["cov"]] <-
