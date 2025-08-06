@@ -34,13 +34,13 @@ runs <-
   tibble::tibble(id = params$ids, gene = params$genes) %>%
   {split(.$gene, .$id)}
 
-purrr::map2(names(runs), runs, function(id, genes) {
+purrr::walk2(names(runs), runs, function(id, genes) {
 
   # id title
   chunks <<- c(chunks, paste("\n##", id))
 
   # get genes
-  purrr::map(genes, function(gene) {
+  purrr::walk(genes, function(gene) {
 
     # gene title
     chunks <<- c(chunks, paste("\n###", gene))
