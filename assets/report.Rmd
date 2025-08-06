@@ -30,51 +30,52 @@ knit_header <-
 chunks <- c()
 
 # grab all pngs
-params$genes %>%
-  sort() %>%
-  purrr::walk(function(gene) {
+runs <-
+  tibble::tibble(id = params$ids, gene = params$genes) %>%
+  {split(.$gene, .$id)}
+
+purrr::map2(names(runs), runs, function(id, genes) {
+
+  # id title
+  chunks <<- c(chunks, paste("\n##", id))
+
+  # get genes
+  purrr::map(genes, function(gene) {
 
     # gene title
-    chunks <<- c(chunks, paste("\n##", gene))
+    chunks <<- c(chunks, paste("\n###", gene))
 
-    # get runs
-    params$ids %>%
-      purrr::walk(function(id) {
+    # get png paths
+    p_paths <-
+      expand.grid(id, gene,
+                  c("genic", "exonic", "ccds"), c("cov", "cov_pct"),
+                  "plot.png") %>%
+      dplyr::arrange(Var4, Var5) %>%
+      tidyr::unite("path", everything(), sep = "_", remove = FALSE)
 
-        chunks <<- c(chunks, paste("\n###", id))
+    for (p in p_paths$path) {
 
-        # PB_panel_PD63118_ACTG1_ccds_cov_pct_plot.png
-        p_paths <-
-          expand.grid(id, gene,
-                      c("genic", "exonic", "ccds"), c("cov", "cov_pct"),
-                      "plot.png") %>%
-          dplyr::arrange(Var4, Var5) %>%
-          tidyr::unite("path", everything(), sep = "_", remove = FALSE)
+      chunks <<- c(chunks, paste("\n####", basename(p)))
 
-        for (p in p_paths$path) {
+      if (file.exists(p)) {
 
-          chunks <<- c(chunks, paste("\n####", basename(p)))
+        knit_plot <- c(
+          '', knit_header,
+          paste0('knitr::include_graphics("', p, '")'),
+          '```', '')
+        knitted_plot <-
+          knitr::knit_child(text = knit_plot, envir = environment(),
+                            quiet = TRUE)
+        chunks <<- c(chunks, knitted_plot)
 
-          if (file.exists(p)) {
+      } else {
 
-            knit_plot <- c(
-              '', knit_header,
-              paste0('knitr::include_graphics("', p, '")'),
-              '```', '')
-            knitted_plot <-
-              knitr::knit_child(text = knit_plot, envir = environment(),
-                                quiet = TRUE)
-            chunks <<- c(chunks, knitted_plot)
+        chunks <<- c(chunks, paste("\nNo coverage plot found at", p))
 
-          } else {
-
-            chunks <<- c(chunks, paste("\nNo coverage plot found at", p))
-
-          }
-        }
-
-      })
+      }
+    }
   })
+})
 
 # return
 cat(unlist(chunks), sep = "\n")

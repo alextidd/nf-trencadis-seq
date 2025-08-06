@@ -535,9 +535,8 @@ workflow {
   report_rmd = file("${projectDir}/assets/report.Rmd", checkIfExists: true)
   ch_plots = \
     plot_coverage_and_genotyping.out.plots
-    | map { meta, plots -> [meta.id, meta.gene, plots] }
+    | map { meta, plots -> ['report', meta.id, meta.gene, plots] }
     | groupTuple()
-    | map { ids, genes, plots -> ['report', ids, genes, plots]}
     | map { x, ids, genes, plots_nested ->
             def plots_flat = plots_nested.flatten()
             return [x, ids, genes, plots_flat]}
