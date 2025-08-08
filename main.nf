@@ -229,9 +229,8 @@ process get_coverage_per_cell {
     rm \$CB.txt
   done < cell_barcodes.txt
 
-  echo "initialising gene coverage file"
+  echo "initialising gene coverage directory"
   rm -rf ${meta.gene} ; mkdir ${meta.gene}
-  touch ${meta.gene}_cov.tsv
 
   echo "calculating coverage per base per cell"
   while read -r CB ; do
@@ -254,15 +253,8 @@ process get_coverage_per_cell {
 
   echo "adding coverage per cell to coverage file"
   # (sort for consistent ordering)
-  find ${meta.gene} -name "*.tsv" | sort | xargs paste \\
-  > ${meta.gene}_cov.tsv
-
-  echo "combining outputs"
-  paste ${meta.gene}_coords.tsv ${meta.gene}_cov.tsv > ${meta.gene}_cov_per_cell.tsv
-  ls *_cov_per_cell.tsv | head -1 | xargs head -1 \\
+  paste ${meta.gene}_coords.tsv $(find ${meta.gene} -name "*.tsv" | sort) \\
   > ${meta.id}_${meta.gene}_coverage_per_cell.tsv
-  cat *_cov_per_cell.tsv | grep -vP "^chr\\tpos" \\
-  >> ${meta.id}_${meta.gene}_coverage_per_cell.tsv
   """
 }
 
