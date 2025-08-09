@@ -229,11 +229,21 @@ process get_coverage_per_cell {
     rm \$CB.txt
   done < cell_barcodes.txt
 
+  echo "creating coverage file"
+  (
+    echo -e "chr\\tpos\\tgene" ;
+    echo -e "\$chr\\t\$start\\t\$end" \
+    | awk -F"\\t" -v gene=${meta.gene} -v OFS="\\t" \
+      '{for(i=\$2; i<=\$3; i++) print \$1, i, gene}' ;
+  ) > ${meta.id}_${meta.gene}_coverage_per_cell.tsv
+
   echo "initialising gene coverage directory"
   rm -rf ${meta.gene} ; mkdir ${meta.gene}
 
   echo "calculating coverage per base per cell"
   while read -r CB ; do
+
+    # get coverage for each cell barcode
     (
       echo "\$CB" ;
       samtools depth \\
@@ -241,20 +251,17 @@ process get_coverage_per_cell {
         -r \$chr:\$start-\$end cell_bams/\$CB.bam \\
       | cut -f3 ;
     ) > ${meta.gene}/\$CB.tsv
+    
+    # add to coverage file
+    paste \\
+      ${meta.id}_${meta.gene}_coverage_per_cell.tsv \\
+      ${meta.gene}/\$CB.tsv \\
+    > ${meta.id}_${meta.gene}_coverage_per_cell.tsv.tmp
+    mv \
+      ${meta.id}_${meta.gene}_coverage_per_cell.tsv.tmp \\
+      ${meta.id}_${meta.gene}_coverage_per_cell.tsv
+      
   done < cell_barcodes.txt
-
-  echo "creating coverage file"
-  (
-    echo -e "chr\\tpos\\tgene" ;
-    echo -e "\$chr\\t\$start\\t\$end" \
-    | awk -F"\\t" -v gene=${meta.gene} -v OFS="\\t" \
-      '{for(i=\$2; i<=\$3; i++) print \$1, i, gene}' ;
-  ) > ${meta.gene}_coords.tsv
-
-  echo "adding coverage per cell to coverage file"
-  # (sort for consistent ordering)
-  paste ${meta.gene}_coords.tsv $(find ${meta.gene} -name "*.tsv" | sort) \\
-  > ${meta.id}_${meta.gene}_coverage_per_cell.tsv
   """
 }
 
