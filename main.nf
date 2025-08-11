@@ -212,7 +212,7 @@ process get_coverage_per_cell {
   echo "getting cell barcodes"
   # get unique cell barcodes in the BAM, trim CB:Z: prefix
   samtools view ${bam} | cut -f12- | tr "\\t" "\\n" |
-  grep "CB:Z:" | sed 's/^CB:Z://g' | awk '!x[\$0]++' \
+  grep "CB:Z:" | sed 's/^CB:Z://g' | awk '!x[\$0]++' \\
   > cell_barcodes.txt
 
   echo "creating a bam per cell"
@@ -220,9 +220,9 @@ process get_coverage_per_cell {
   while read -r CB ; do
     # subset
     echo \$CB > \$CB.txt
-    subset-bam \
-      -b ${bam} \
-      --cell-barcodes \$CB.txt \
+    subset-bam \\
+      -b ${bam} \\
+      --cell-barcodes \$CB.txt \\
       --out-bam cell_bams/\$CB.bam
     # index
     samtools index -@ ${task.cpus} cell_bams/\$CB.bam
@@ -232,8 +232,8 @@ process get_coverage_per_cell {
   echo "creating coverage file"
   (
     echo -e "chr\\tpos\\tgene" ;
-    echo -e "\$chr\\t\$start\\t\$end" \
-    | awk -F"\\t" -v gene=${meta.gene} -v OFS="\\t" \
+    echo -e "\$chr\\t\$start\\t\$end" \\
+    | awk -F"\\t" -v gene=${meta.gene} -v OFS="\\t" \\
       '{for(i=\$2; i<=\$3; i++) print \$1, i, gene}' ;
   ) > ${meta.id}_${meta.gene}_coverage_per_cell.tsv
 
@@ -257,7 +257,7 @@ process get_coverage_per_cell {
       ${meta.id}_${meta.gene}_coverage_per_cell.tsv \\
       ${meta.gene}/\$CB.tsv \\
     > ${meta.id}_${meta.gene}_coverage_per_cell.tsv.tmp
-    mv \
+    mv \\
       ${meta.id}_${meta.gene}_coverage_per_cell.tsv.tmp \\
       ${meta.id}_${meta.gene}_coverage_per_cell.tsv
       
